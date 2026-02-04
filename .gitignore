@@ -4,7 +4,6 @@
 *.gcov
 *.js.mem
 *.map
-*.mp4
 *.o
 *.out
 *.pyc
