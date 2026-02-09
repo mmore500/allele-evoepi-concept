@@ -1,5 +1,66 @@
 \section{Methods} \label{sec:methods}
 
+
+% drafted by Gemini, edited by MAM 2026-02-09
+\subsection*{ABM v.2026-02-09-allele-abm}
+
+\subsubsection*{Notation and Parameters}
+\begin{center}
+\begin{tabular}{r l l p{6cm}}
+    \textbf{Symbol} & \textbf{Variable} & \textbf{Domain} & \textbf{Description} \\ \hline
+    $N$ & \texttt{POP\_SIZE} & $\in \mathbb{N}$ & Total count of hosts in the simulation \\
+    $L$ & \texttt{N\_SITES} & $\in \mathbb{N}$ & Number of loci in the pathogen genome \\
+    $g$ & \texttt{pathogen\_genomes} & $\in \{0,1\}^L$ & Pathogen genotype (bitstring) \\
+    $a$ & - & $\in \{0,1\}$ & Specific allele at a given locus \\
+    $H$ & \texttt{host\_immunities} & $\in [0,1]^{N \times L \times 2}$ & Host immunity history tensor \\
+    $I$ & \texttt{host\_statuses} & $\in \mathbb{N}_0$ & Days since infection (0 is susceptible) \\
+    $\alpha$ & \texttt{IMMUNE\_STRENGTH} & $\in [0,1]$ & Immune efficacy per locus \\
+    $\beta$ & \texttt{within\_host\_b} & $\in \mathbb{R}^+$ & Within-host selection coefficient \\
+    $\tau$ & \texttt{within\_host\_t} & $\in \mathbb{R}^+$ & Effective infection duration for mutation \\
+    $\omega$ & \texttt{WANING\_RATE} & $\in [0,1]$ & Daily geometric decay rate \\
+    $\mu$ & \texttt{MUTATION\_RATE} & $\in [0,1]$ & Base mutation probability \\
+\end{tabular}
+\end{center}
+
+\subsubsection*{System State}
+The model tracks a population of $N$ well-mixed hosts.
+Each host may be infected by one pathogen strain.
+To begin the simulation, 100 hosts are infected with a common ancestral strain (wildtype, all zeros).
+
+Each pathogen strain is defined by a binary string $g$ of length $L$.
+Host $i$ maintains an immunity history $H_{i}$, where $H_{i,\ell,a}$ quantifies the defense against allele $a$ at locus $\ell$.
+
+\subsubsection*{Transmission Dynamics}
+In each time step, every host $i$ selects a single random contact $j$ from the entire population.
+Transmission is only possible if host $i$ is susceptible ($I_i=0$) and the contact $j$ is infected ($I_j > 0$).
+The susceptibility of host $i$ depends on the specific alleles carried by the contact's genome $g_j$.
+We calculate the probability of infection as the product of failure probabilities at each locus $\ell$:
+$$
+P(\text{infection}) \propto \prod_{\ell=1}^{L} \left( 1 - \alpha \cdot H_{i, \ell, g_{j,\ell}} \right)
+$$
+Transmission succeeds if a random draw falls below this calculated probability.
+
+\subsubsection*{Mutation Mechanism}
+Mutations are driven by the immune pressure difference between the current allele $a$ and the potential mutant allele $1-a$.
+The growth advantage $b$ for the mutant at locus $\ell$ is calculated as:
+$$
+b = 1 + \beta (H_{i, \ell, a} - H_{i, \ell, 1-a})
+$$
+The probability of a mutation occurring during the infection period is derived from the net growth of the mutant lineage:
+$$
+P(\text{mutate}) = \frac{\mu}{b - 1} \left( e^{(b - 1)\tau} - 1 \right)
+$$
+New mutations are applied immediately to the transmitting genome upon infection of a new host.
+
+\subsubsection*{Immunity Updates}
+Waning occurs every step via global geometric decay:
+$$H(t+1) = H(t)(1 - \omega)$$
+Recovery occurs when the infection duration exceeds the inverse recovery rate.
+Upon clearing an infection with genome $g$, the host's immunity to the specific alleles present in that genome saturates:
+$$
+H_{i, \ell, g_\ell} \leftarrow 1.0 \quad \forall \ell \in \{1, \dots, L\}
+$$
+
 \subsection{Software and Data Availability} \label{sec:materials}
 
 Simulation code, configuration files, and batch scripts for this work are available via Zenodo at \url{TODO}.
