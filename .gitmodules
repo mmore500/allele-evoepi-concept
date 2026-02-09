@@ -1,10 +1,10 @@
 [submodule "binder/binder"]
 	path = binder/binder
-	url = https://github.com/mmore500/paperproject.git
+	url = https://github.com/mmore500/allele-evoepi-concept.git
 	branch = binder
 	shallow = true
 [submodule "binder/binder-2024-10-20-example.ipynb"]
 	path = binder/binder-2024-10-20-example.ipynb
-	url = https://github.com/mmore500/paperproject.git
+	url = https://github.com/mmore500/allele-evoepi-concept.git
 	branch = binder-2024-10-20-example.ipynb
 	shallow = true
