@@ -15,8 +15,6 @@ echo "other initialization"
 echo "--------------------"
 ################################################################################
 
-[[ -f ~/.secrets.sh ]] && source ~/.secrets.sh || echo "~/secrets.sh not found"
-
 # adapted from https://stackoverflow.com/a/24114056
 script_dir="$(dirname -- "$BASH_SOURCE")"
 echo "script_dir ${script_dir}"

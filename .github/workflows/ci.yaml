@@ -142,6 +142,92 @@ jobs:
           branch: binder # The branch the action should deploy to.
           folder: . # The folder the action should deploy.
 
+  # adapted from https://code.dblock.org/2021/09/03/generating-task-matrix-by-looping-over-repo-files-with-github-actions.html
+  list-marimo-notebooks:
+    runs-on: ubuntu-22.04
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v2
+      - id: set-matrix
+        run: |
+          cd bindle
+          echo "::set-output name=matrix::$(ls *.py | jq -R -s -c 'split("\n")[:-1]')"
+
+  bindle-notebook:
+    needs: list-marimo-notebooks
+    runs-on: ubuntu-22.04
+    env:
+      # RE https://stackoverflow.com/a/40184923/17332200
+      PIP_NO_CACHE_DIR: 1
+    strategy:
+      fail-fast: false
+      matrix:
+        notebook: ${{ fromJson(needs.list-marimo-notebooks.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v2
+      - name: Setup headless display
+        uses: pyvista/setup-headless-display-action@v2
+      - run: |
+          sudo apt-get update -y
+          sudo apt-get install -y ghostscript imagemagick python3-pil libgif-dev ffmpeg mat2
+          python -m pip install pip --upgrade
+          sudo python -m pip install pip --upgrade
+          sudo python -m pip install uv --upgrade
+          sudo python -m uv pip install -r requirements.txt  --system
+      # Adapted from https://askubuntu.com/a/524368
+      - run: ./bindle/execute_notebooks.sh "${{ matrix.notebook }}"
+      # adapted from https://unix.stackexchange.com/a/545630
+      - run: find -type f -name "*.pdf" -exec bash -c 'gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 -dPDFSETTINGS=/screen -dNOPAUSE -dBATCH -dQUIET -sOutputFile="new.pdf" "{}"; rm "{}"; mv "new.pdf" "{}";' {} \;
+      - name: Strip PDF metadata
+        run: |
+          find -type f -name "*.pdf" -exec mat2 --lightweight --inplace --unknown-members keep "{}" \;
+      - run: |
+          git init
+          sed -i '/teeplots\//d' bindle/.gitignore
+          sed -i '/\*\.ipynb/d' bindle/.gitignore
+          sed -i '/\*\.mp4/d' .gitignore
+          rm -rf .gitmodules
+      - uses: fregante/setup-git-user@v1
+      - run: git commit --allow-empty -m "Initial commit"
+      - uses: JamesIves/github-pages-deploy-action@4.0.0
+        with:
+          branch: bindle-${{ matrix.notebook }} # The branch the action should deploy to.
+          folder: . # The folder the action should deploy.
+
+  bindle:
+    runs-on: ubuntu-22.04
+    env:
+      # RE https://stackoverflow.com/a/40184923/17332200
+      PIP_NO_CACHE_DIR: 1
+    steps:
+      - uses: actions/checkout@v2
+      - name: Setup headless display
+        uses: pyvista/setup-headless-display-action@v2
+      - run: |
+          sudo apt-get update -y
+          sudo apt-get install -y ghostscript imagemagick python3-pil libgif-dev ffmpeg
+          python -m pip install pip --upgrade
+          sudo python -m pip install pip --upgrade
+          sudo python -m pip install uv --upgrade
+          sudo python -m uv pip install -r requirements.txt  --system
+      # Adapted from https://askubuntu.com/a/524368
+      - run: ./bindle/execute_notebooks.sh
+      # adapted from https://unix.stackexchange.com/a/545630
+      - run: find -type f -name "*.pdf" -exec bash -c 'gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 -dPDFSETTINGS=/screen -dNOPAUSE -dBATCH -dQUIET -sOutputFile="new.pdf" "{}"; rm "{}"; mv "new.pdf" "{}";' {} \;
+      - run: |
+          git init
+          sed -i '/teeplots\//d' bindle/.gitignore
+          sed -i '/\*\.ipynb/d' bindle/.gitignore
+          sed -i '/\*\.mp4/d' .gitignore
+          rm -rf .gitmodules
+      - uses: fregante/setup-git-user@v1
+      - run: git commit --allow-empty -m "Initial commit"
+      - uses: JamesIves/github-pages-deploy-action@4.0.0
+        with:
+          branch: bindle # The branch the action should deploy to.
+          folder: . # The folder the action should deploy.
+
   tex:
     name: Latex Build and Deploy
     runs-on: ubuntu-22.04
