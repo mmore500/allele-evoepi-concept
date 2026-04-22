@@ -2,7 +2,7 @@
 
 ################################################################################
 echo
-echo "running clear_outplots.sh"
+echo "running clear_notebooks.sh"
 echo "---------------------------------------------"
 ################################################################################
 
@@ -21,12 +21,20 @@ echo "script_dir ${script_dir}"
 
 ################################################################################
 echo
-echo "clear outplots in current directory"
-echo "-----------------------------------"
+echo "clear generated notebooks in current directory"
+echo "----------------------------------------------"
 ################################################################################
 
-rm -rf "${script_dir}/outplots"
-rm -rf "${script_dir}/teeplots"
+# marimo notebooks are source .py files; the ipynb equivalents are generated
+# artifacts created by execute_notebooks.sh, so remove any that exist.
+shopt -s nullglob
+
+for notebook in "${script_dir}/"*.py; do
+  name="$(basename "${notebook%.*}")"
+  rm -f "${script_dir}/${name}.ipynb"
+done
+
+shopt -u nullglob
 
 ################################################################################
 echo
@@ -36,7 +44,7 @@ echo "-------------------------"
 
 shopt -s nullglob
 
-for script in "${script_dir}/"*/clear_outplots.sh; do
+for script in "${script_dir}/"*/clear_notebooks.sh; do
   "${script}"
 done
 
