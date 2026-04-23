@@ -30,17 +30,7 @@ def import_pkg():
     from tqdm.auto import tqdm
     from watermark import watermark
 
-    return (
-        cp,
-        display_html,
-        mo,
-        np,
-        pd,
-        sns,
-        tp,
-        tqdm,
-        watermark,
-    )
+    return cp, display_html, mo, np, pd, sns, tp, tqdm, watermark
 
 
 @app.cell(hide_code=True)
@@ -72,27 +62,14 @@ def configure_backend(cp, np):
 
 @app.cell(hide_code=True)
 def delimit_simulation(mo):
-    mo.md(
-        """
+    mo.md("""
     ## Simulation Implementation
-    """
-    )
+    """)
     return
 
 
 @app.cell
-def def_simulate(
-    Dict,
-    List,
-    Sequence,
-    Tuple,
-    Union,
-    np,
-    pd,
-    random,
-    tqdm,
-    xp,
-):
+def def_simulate(Dict, List, Sequence, Tuple, Union, np, pd, random, tqdm, xp):
     def simulate(
         N_SITES: int = 2,
         POP_SIZE: int = 1_000_000,
@@ -392,11 +369,9 @@ def def_simulate(
 
 @app.cell(hide_code=True)
 def delimit_plotting(mo):
-    mo.md(
-        """
+    mo.md("""
     ## Plotting Implementation
-    """
-    )
+    """)
     return
 
 
@@ -529,11 +504,9 @@ def def_plotter(it, np, pathlib, pd, sns, tp):
 
 @app.cell(hide_code=True)
 def delimit_run(mo):
-    mo.md(
-        """
+    mo.md("""
     ## Run Simulation and Render Plots across Condition Matrix
-    """
-    )
+    """)
     return
 
 
@@ -595,11 +568,9 @@ def run_simulation(
 
 @app.cell(hide_code=True)
 def delimit_ode(mo):
-    mo.md(
-        """
+    mo.md("""
     ## ODE Reference Trajectories
-    """
-    )
+    """)
     return
 
 
