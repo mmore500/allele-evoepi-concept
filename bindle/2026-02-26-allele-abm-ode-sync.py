@@ -62,9 +62,11 @@ def configure_backend(cp, np):
 
 @app.cell(hide_code=True)
 def delimit_simulation(mo):
-    mo.md("""
+    mo.md(
+        """
     ## Simulation Implementation
-    """)
+    """
+    )
     return
 
 
@@ -161,9 +163,7 @@ def def_simulate(Dict, List, Sequence, Tuple, Union, np, pd, random, tqdm, xp):
                     pathogen_genomes[:, None] >> xp.arange(N_SITES)
                 ) & 1
 
-                imm_reshaped = xp.reshape(
-                    host_immunities, (-1, N_SITES, 2)
-                )
+                imm_reshaped = xp.reshape(host_immunities, (-1, N_SITES, 2))
 
                 idx_curr = pathogen_bits[:, :, None]
                 idx_opp = 1 - idx_curr
@@ -305,9 +305,7 @@ def def_simulate(Dict, List, Sequence, Tuple, Union, np, pd, random, tqdm, xp):
             host_statuses, pathogen_genomes = transmit_infection(
                 host_statuses, pathogen_genomes, host_immunities
             )
-            pathogen_genomes = apply_mutations(
-                pathogen_genomes, host_statuses
-            )
+            pathogen_genomes = apply_mutations(pathogen_genomes, host_statuses)
             host_statuses, host_immunities = update_recoveries(
                 host_statuses, host_immunities, pathogen_genomes
             )
@@ -322,10 +320,12 @@ def def_simulate(Dict, List, Sequence, Tuple, Union, np, pd, random, tqdm, xp):
         data_log: List[Dict[str, float]] = []
 
         for t in tqdm(range(N_STEPS)):
-            host_statuses, pathogen_genomes, host_immunities = (
-                update_simulation(
-                    host_statuses, pathogen_genomes, host_immunities
-                )
+            (
+                host_statuses,
+                pathogen_genomes,
+                host_immunities,
+            ) = update_simulation(
+                host_statuses, pathogen_genomes, host_immunities
             )
 
             inf_mask = host_statuses > 0
@@ -369,9 +369,11 @@ def def_simulate(Dict, List, Sequence, Tuple, Union, np, pd, random, tqdm, xp):
 
 @app.cell(hide_code=True)
 def delimit_plotting(mo):
-    mo.md("""
+    mo.md(
+        """
     ## Plotting Implementation
-    """)
+    """
+    )
     return
 
 
@@ -504,9 +506,11 @@ def def_plotter(it, np, pathlib, pd, sns, tp):
 
 @app.cell(hide_code=True)
 def delimit_run(mo):
-    mo.md("""
+    mo.md(
+        """
     ## Run Simulation and Render Plots across Condition Matrix
-    """)
+    """
+    )
     return
 
 
@@ -568,9 +572,11 @@ def run_simulation(
 
 @app.cell(hide_code=True)
 def delimit_ode(mo):
-    mo.md("""
+    mo.md(
+        """
     ## ODE Reference Trajectories
-    """)
+    """
+    )
     return
 
 
@@ -578,26 +584,30 @@ def delimit_ode(mo):
 def plot_ode(pd, sns):
     from matplotlib import pyplot as plt
 
-    ode_df = pd.read_csv("https://osf.io/pvfst/download")
-    ode_long = ode_df.melt(
-        id_vars="TIME",
-        var_name="variable",
-        value_name="value",
-    )
-    ode_long["type"] = ode_long["variable"].str.slice(0, 1)
-    sns.relplot(
-        ode_long,
-        x="TIME",
-        y="value",
-        hue="variable",
-        kind="line",
-        col="type",
-        facet_kws=dict(sharey=False),
-    )
-    plt.xlim(0, 1100)
-    plt.gcf().set_size_inches(7, 2.2)
-    plt.tight_layout()
-    sns.move_legend(plt.gcf(), "upper left", bbox_to_anchor=(1, 1))
+    try:
+        ode_df = pd.read_csv("https://osf.io/pvfst/download")
+    except Exception as exc:
+        print(f"skipping ODE reference plot: {exc}")
+    else:
+        ode_long = ode_df.melt(
+            id_vars="TIME",
+            var_name="variable",
+            value_name="value",
+        )
+        ode_long["type"] = ode_long["variable"].str.slice(0, 1)
+        sns.relplot(
+            ode_long,
+            x="TIME",
+            y="value",
+            hue="variable",
+            kind="line",
+            col="type",
+            facet_kws=dict(sharey=False),
+        )
+        plt.xlim(0, 1100)
+        plt.gcf().set_size_inches(7, 2.2)
+        plt.tight_layout()
+        sns.move_legend(plt.gcf(), "upper left", bbox_to_anchor=(1, 1))
     return
 
 
