@@ -741,7 +741,7 @@ def run_phylogeny_simulation(simulate):
         seed=2,
         track_phylogeny=True,
     )
-    return PHYLO_N_SITES, phylogeny_df
+    return PHYLO_N_SITES, phylo_df, phylogeny_df
 
 
 @app.cell
@@ -759,19 +759,29 @@ def delimit_phylogeny_plot(mo):
     ### Plot Surviving Lineages with iplotx
 
     Drop dead lineages with `phyloframe`, then render the resulting tree via
-    `iplotx`, coloring tips by their founder genome. Tree is downsampled if
-    too large to keep the visualization legible.
+    `iplotx`, coloring tips by their founder strain. Adjacent stackplot shows
+    the population composition over time, with strains stacked in order of
+    increasing Hamming weight so bit-weight composition reads bottom-to-top.
     """
     )
     return
 
 
 @app.cell
-def plot_phylogeny(PHYLO_N_SITES, np, pathlib, phylogeny_df, sns, tp):
+def plot_phylogeny(
+    PHYLO_N_SITES,
+    np,
+    pathlib,
+    phylo_df,
+    phylogeny_df,
+    sns,
+    tp,
+):
     # workaround: iplotx 1.7.x uses importlib.metadata without importing it
     import importlib.metadata  # noqa: F401
 
     import iplotx as ipx
+    import matplotlib.colors as mcolors
     import matplotlib.pyplot as pyplot_phylo
     from phyloframe import legacy as pfl
 
@@ -803,46 +813,80 @@ def plot_phylogeny(PHYLO_N_SITES, np, pathlib, phylogeny_df, sns, tp):
     print(f"pruned phylogeny: {len(pruned_df)} nodes")
     print(f"leaf count: {pfl.alifestd_count_leaf_nodes(pruned_df)}")
 
-    import matplotlib.colors as mcolors
-
     fmt = f"0{PHYLO_N_SITES}b"
     pruned_df = pruned_df.assign(
         strain=pruned_df["genome"]
         .astype(int)
         .map(lambda g: format(int(g), fmt)[::-1]),
     )
-    palette = dict(
-        zip(
-            sorted(pruned_df["strain"].unique()),
-            sns.color_palette("colorblind", pruned_df["strain"].nunique()),
-        )
+
+    # Strain catalog: every bit string of length N_SITES, ordered by Hamming
+    # weight then lexicographically. A single colorblind palette keyed on this
+    # ordering is shared by phylogeny tips and stackplot layers so the two
+    # panels read together.
+    all_strains = sorted(
+        (format(g, fmt)[::-1] for g in range(2**PHYLO_N_SITES)),
+        key=lambda s: (s.count("1"), s),
     )
+    palette = dict(
+        zip(all_strains, sns.color_palette("colorblind", len(all_strains))),
+    )
+
     # iplotx accepts vertex_color as a positional list aligned to rows of the
     # phyloframe shim; pass hex strings to keep matplotlib happy.
     vertex_colors = [
         mcolors.to_hex(palette[strain]) for strain in pruned_df["strain"]
     ]
 
+    # Strain prevalence series: any Strain_* column in the timeseries gets
+    # stacked, in the same Hamming-weight ordering as the palette.
+    strain_cols = [
+        f"Strain_{s}" for s in all_strains if f"Strain_{s}" in phylo_df.columns
+    ]
+    stack_strains = [c[len("Strain_") :] for c in strain_cols]
+    steps = phylo_df["Step"].to_numpy()
+    layers = np.stack([phylo_df[c].to_numpy() for c in strain_cols], axis=0)
+    layer_colors = [palette[s] for s in stack_strains]
+
     with tp.teed(
         pyplot_phylo.subplots,
-        figsize=(6, 6),
+        nrows=1,
+        ncols=2,
+        figsize=(11, 6),
+        gridspec_kw={"width_ratios": [1.1, 1.0]},
         teeplot_outattrs={
             "what": "phylogeny",
             "n_sites": PHYLO_N_SITES,
         },
         teeplot_subdir=pathlib.Path(__file__).stem,
-    ) as (fig, ax):
+    ) as (fig, axes):
+        ax_tree, ax_stack = axes
+
         ipx.tree(
             pfl.alifestd_to_iplotx_pandas(pruned_df),
-            ax=ax,
+            ax=ax_tree,
             layout="horizontal",
             vertex_color=vertex_colors,
             vertex_size=8,
             edge_linewidth=0.7,
             margins=0.05,
         )
-        ax.set_title("pathogen phylogeny (extant lineages)")
+        ax_tree.set_title("pathogen phylogeny (extant lineages)")
 
+        ax_stack.stackplot(
+            steps,
+            layers,
+            colors=layer_colors,
+            labels=[f"strain {s}" for s in stack_strains],
+        )
+        ax_stack.set_xlim(steps.min(), steps.max())
+        ax_stack.set_ylim(0, layers.sum(axis=0).max() * 1.02)
+        ax_stack.set_xlabel("Step")
+        ax_stack.set_ylabel("Prevalence")
+        ax_stack.set_title("composition by Hamming weight")
+        ax_stack.grid(True, alpha=0.3)
+
+        # Single shared legend at the right edge, ordered by Hamming weight.
         legend_handles = [
             pyplot_phylo.Line2D(
                 [0],
@@ -851,16 +895,17 @@ def plot_phylogeny(PHYLO_N_SITES, np, pathlib, phylogeny_df, sns, tp):
                 color="w",
                 markerfacecolor=palette[s],
                 markersize=8,
-                label=f"strain {s}",
+                label=f"strain {s} (Ham. wt. {s.count('1')})",
             )
-            for s in sorted(palette)
+            for s in all_strains
         ]
-        ax.legend(
+        ax_stack.legend(
             handles=legend_handles,
             loc="center left",
             bbox_to_anchor=(1.02, 0.5),
             frameon=False,
         )
+        fig.tight_layout()
     return
 
 
