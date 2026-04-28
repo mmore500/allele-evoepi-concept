@@ -94,9 +94,9 @@ def def_simulate(Dict, List, Sequence, Tuple, Union, np, pd, random, tqdm, xp):
 
         MUTATION_RATE = xp.asarray(MUTATION_RATE, dtype=xp.float32)
 
-        if N_SITES > 8:
+        if N_SITES > 16:
             raise NotImplementedError(
-                "current data types support only up to 8 sites",
+                "current data types support only up to 16 sites",
             )
 
         # Phylogeny tracking state. Each entry corresponds to one infection
@@ -112,7 +112,8 @@ def def_simulate(Dict, List, Sequence, Tuple, Union, np, pd, random, tqdm, xp):
             Tuple[xp.ndarray, xp.ndarray, xp.ndarray, xp.ndarray]
         ):
             """Initialize population statuses, genomes, and immune history."""
-            pathogen_genomes = xp.zeros(shape=POP_SIZE, dtype=xp.uint8)
+            # uint16 to support up to 16 sites (uint8 caps at 8).
+            pathogen_genomes = xp.zeros(shape=POP_SIZE, dtype=xp.uint16)
             # host_immunities: Tracks each of the 2*N_SITES alleles
             host_immunities = xp.full(
                 shape=(POP_SIZE, 2 * N_SITES),
@@ -340,10 +341,10 @@ def def_simulate(Dict, List, Sequence, Tuple, Union, np, pd, random, tqdm, xp):
             for s in range(N_SITES):
                 mutation_occurs = (
                     xp.random.rand(mprobs.shape[0]) < mprobs[:, s]
-                ).astype(xp.uint8)
+                ).astype(xp.uint16)
                 pathogen_genomes[mutation_mask] ^= (
                     mutation_occurs << s
-                ).astype(xp.uint8)
+                ).astype(xp.uint16)
 
             return pathogen_genomes
 
@@ -478,8 +479,8 @@ def run_phylogeny_simulation(simulate):
     # Baseline ABM/ODE-sync params from the sync notebook, scaled up for an
     # exact-phylogeny demo at 200k pop x 600 steps.
     PHYLO_POP_SIZE = 200_000
-    PHYLO_N_STEPS = 600
-    PHYLO_N_SITES = 2
+    PHYLO_N_STEPS = 1_200
+    PHYLO_N_SITES = 10
     PHYLO_MUTATION_RATE = 5e-5
 
     phylo_df, phylogeny_df = simulate(
@@ -572,17 +573,16 @@ def plot_phylogeny(
         ),
     )
 
-    # Strain catalog: every bit string of length N_SITES, ordered by Hamming
-    # weight then lexicographically. A single colorblind palette keyed on this
-    # ordering is shared by phylogeny tips and stackplot layers so the two
-    # panels read together.
+    # With 2**N_SITES potential strains (1024 at N_SITES=10) per-strain colors
+    # become unworkable; instead key one sequential palette on Hamming weight,
+    # then map every strain (and every tip) to its corresponding HW color.
     all_strains = sorted(
         (format(g, fmt)[::-1] for g in range(2**PHYLO_N_SITES)),
         key=lambda s: (s.count("1"), s),
     )
-    palette = dict(
-        zip(all_strains, sns.color_palette("colorblind", len(all_strains))),
-    )
+    hw_values = list(range(PHYLO_N_SITES + 1))
+    hw_palette = sns.color_palette("rocket_r", len(hw_values))
+    palette = {s: hw_palette[s.count("1")] for s in all_strains}
 
     # iplotx accepts vertex_color as a positional list aligned to rows of the
     # phyloframe shim; pass hex strings to keep matplotlib happy. The synthetic
@@ -608,8 +608,6 @@ def plot_phylogeny(
 
     # Per-Hamming-weight aggregation, normalized so each row sums to 1
     # (space-filling stackplot).
-    hw_values = sorted({s.count("1") for s in stack_strains})
-    hw_palette = sns.color_palette("rocket_r", len(hw_values))
     hw_layers = np.stack(
         [
             np.sum(
@@ -617,7 +615,8 @@ def plot_phylogeny(
                     phylo_df[f"Strain_{s}"].to_numpy()
                     for s in stack_strains
                     if s.count("1") == w
-                ],
+                ]
+                or [np.zeros_like(steps, dtype=float)],
                 axis=0,
             )
             for w in hw_values
@@ -662,7 +661,10 @@ def plot_phylogeny(
             layout="vertical",
             vertex_color=vertex_colors,
             vertex_size=5,
+            vertex_zorder=3,
+            edge_color="gray",
             edge_linewidth=0.7,
+            edge_zorder=1,
             margins=0.05,
             strip_axes=False,
         )
@@ -689,20 +691,9 @@ def plot_phylogeny(
         sns.despine(ax=ax_strain, left=True)
         sns.despine(ax=ax_hw, left=True)
 
-        # Single shared legend grouping strains by Hamming weight; HW bands
-        # use a sequential palette so darker = more "1" alleles.
-        strain_handles = [
-            pyplot_phylo.Line2D(
-                [0],
-                [0],
-                marker="o",
-                color="w",
-                markerfacecolor=palette[s],
-                markersize=6,
-                label=f"strain {s} (HW {s.count('1')})",
-            )
-            for s in all_strains
-        ]
+        # Hamming-weight legend (sequential palette: darker = more "1"
+        # alleles). Per-strain entries would explode at 2**N_SITES; instead
+        # all panels share the HW key.
         hw_handles = [
             pyplot_phylo.Line2D(
                 [0],
@@ -716,7 +707,7 @@ def plot_phylogeny(
             for i, w in enumerate(hw_values)
         ]
         ax_hw.legend(
-            handles=strain_handles + hw_handles,
+            handles=hw_handles,
             loc="center left",
             bbox_to_anchor=(1.02, 0.5),
             frameon=False,
