@@ -791,7 +791,10 @@ def delimit_long_run(mo):
 def run_phylogeny_long(make_phylogeny_plot, simulate):
     LONG_N_SITES = 16
     LONG_N_STEPS = 12_000
-    LONG_POP_SIZE = 200_000
+    # Down-scale population so the 12 000-step phylogeny tracker fits in
+    # CI memory (16 GB); the qualitative drift / turnover dynamics at this
+    # mutation rate look the same at lower N.
+    LONG_POP_SIZE = 20_000
     LONG_MUTATION_RATE = 5e-5
 
     print(f"=== long run: N_SITES={LONG_N_SITES}, N_STEPS={LONG_N_STEPS} ===")
