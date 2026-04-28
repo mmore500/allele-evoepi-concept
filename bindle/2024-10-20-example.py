@@ -24,7 +24,8 @@ def import_pkg():
 
 @app.cell(hide_code=True)
 def do_watermark(mo, watermark):
-    mo.md(f"""
+    mo.md(
+        f"""
     ```Text
     {watermark(
         current_date=True,
@@ -36,7 +37,8 @@ def do_watermark(mo, watermark):
         globals_=globals(),
     )}
     ```
-    """)
+    """
+    )
     return
 
 
