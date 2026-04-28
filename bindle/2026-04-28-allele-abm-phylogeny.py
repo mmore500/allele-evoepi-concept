@@ -82,11 +82,9 @@ def configure_backend(cp, np):
 
 @app.cell(hide_code=True)
 def delimit_simulation(mo):
-    mo.md(
-        """
+    mo.md("""
     ## Simulation Implementation
-    """
-    )
+    """)
     return
 
 
@@ -488,8 +486,7 @@ def def_simulate(Dict, List, Sequence, Tuple, Union, np, pd, random, tqdm, xp):
 
 @app.cell(hide_code=True)
 def delimit_phylogeny(mo):
-    mo.md(
-        """
+    mo.md("""
     ## Exact Phylogeny Tracking
 
     Sweep `N_SITES` over a few values to compare phylogeny shapes; for each
@@ -498,8 +495,7 @@ def delimit_phylogeny(mo):
     absolute stackplot share a per-strain `husl` palette; the space-filling
     stackplot to the right groups strains by Hamming weight so bit-weight
     composition reads bottom-to-top.
-    """
-    )
+    """)
     return
 
 
@@ -748,9 +744,11 @@ def run_phylogeny_sweep(make_phylogeny_plot, simulate):
     PHYLO_N_STEPS = 1_200
     PHYLO_MUTATION_RATE = 5e-5
 
+    # Underscored locals so marimo treats these as cell-private (the long
+    # run cell also needs to bind phylo_df / phylogeny_df).
     for PHYLO_N_SITES in (2, 4, 8, 16):
         print(f"=== N_SITES={PHYLO_N_SITES} ===")
-        phylo_df, phylogeny_df = simulate(
+        _phylo_df, _phylogeny_df = simulate(
             MUTATION_RATE=PHYLO_MUTATION_RATE,
             N_SITES=PHYLO_N_SITES,
             N_STEPS=PHYLO_N_STEPS,
@@ -765,25 +763,23 @@ def run_phylogeny_sweep(make_phylogeny_plot, simulate):
             seed=2,
             track_phylogeny=True,
         )
-        print(f"  phylogeny: {len(phylogeny_df)} total nodes")
-        print(f"  extant tips: {phylogeny_df['extant'].sum()}")
-        make_phylogeny_plot(PHYLO_N_SITES, phylo_df, phylogeny_df)
+        print(f"  phylogeny: {len(_phylogeny_df)} total nodes")
+        print(f"  extant tips: {_phylogeny_df['extant'].sum()}")
+        make_phylogeny_plot(PHYLO_N_SITES, _phylo_df, _phylogeny_df)
         # Free large per-iteration buffers before the next run.
-        del phylo_df, phylogeny_df
+        del _phylo_df, _phylogeny_df
     return
 
 
 @app.cell(hide_code=True)
 def delimit_long_run(mo):
-    mo.md(
-        """
+    mo.md("""
     ### Extended N_SITES = 16 Run
 
     Same baseline params as the sweep but stretched 10× along the time
     axis (12 000 steps, figure 10× as tall) so the long-horizon strain
     turnover and Hamming-weight drift are legible.
-    """
-    )
+    """)
     return
 
 
@@ -798,7 +794,7 @@ def run_phylogeny_long(make_phylogeny_plot, simulate):
     LONG_MUTATION_RATE = 5e-5
 
     print(f"=== long run: N_SITES={LONG_N_SITES}, N_STEPS={LONG_N_STEPS} ===")
-    phylo_df, phylogeny_df = simulate(
+    _phylo_df, _phylogeny_df = simulate(
         MUTATION_RATE=LONG_MUTATION_RATE,
         N_SITES=LONG_N_SITES,
         N_STEPS=LONG_N_STEPS,
@@ -813,15 +809,15 @@ def run_phylogeny_long(make_phylogeny_plot, simulate):
         seed=2,
         track_phylogeny=True,
     )
-    print(f"  phylogeny: {len(phylogeny_df)} total nodes")
-    print(f"  extant tips: {phylogeny_df['extant'].sum()}")
+    print(f"  phylogeny: {len(_phylogeny_df)} total nodes")
+    print(f"  extant tips: {_phylogeny_df['extant'].sum()}")
     make_phylogeny_plot(
         LONG_N_SITES,
-        phylo_df,
-        phylogeny_df,
+        _phylo_df,
+        _phylogeny_df,
         height_scale=10.0,
     )
-    del phylo_df, phylogeny_df
+    del _phylo_df, _phylogeny_df
     return
 
 
