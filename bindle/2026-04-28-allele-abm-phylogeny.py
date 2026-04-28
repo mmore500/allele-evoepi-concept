@@ -713,6 +713,7 @@ def def_make_phylogeny_plot(
                 weights="w",
                 multiple="stack",
                 common_norm=True,
+                cut=0,
                 palette={s: strain_palette[s] for s in stack_strains},
                 ax=ax_strain,
                 fill=True,
@@ -724,6 +725,19 @@ def def_make_phylogeny_plot(
             # rare strains stay visible alongside dominant ones; each
             # band keeps its linear share of the column height.
             rescale_stacked_kdeplot(ax_strain, orient="y", scale="log")
+            # Auto-xlim on log-scaled axes likes to round up to the next
+            # decade and leaves the actual peak density crammed into the
+            # left third of the panel; pin the upper limit to the largest
+            # band edge so the curves fill the column.
+            _band_xs = [
+                c.get_paths()[0].vertices[:, 0].max()
+                for c in ax_strain.collections
+                if c.get_paths()
+            ]
+            if _band_xs:
+                _peak = max(_band_xs)
+                _lo, _ = ax_strain.get_xlim()
+                ax_strain.set_xlim(_lo, _peak * 1.05)
 
             _hw_str = [f"HW {w}" for w in hw_values]
             _hw_long = pd.DataFrame(
@@ -798,6 +812,10 @@ def def_make_phylogeny_plot(
             # encodes.
             for ax in (ax_strain, ax_hw):
                 ax.set_xlabel("")
+            # multiple="fill" puts every column in [0, 1] but kdeplot's
+            # auto-xlim leaves a sliver of padding on each side; clamp so
+            # the panel uses the full column.
+            ax_hw.set_xlim(0, 1)
 
             # Time axis lives on the leftmost panel; show positive step
             # numbers even though the underlying coordinate is negated to
