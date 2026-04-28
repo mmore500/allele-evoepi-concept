@@ -474,7 +474,7 @@ def run_phylogeny_simulation(simulate):
     PHYLO_POP_SIZE = 10_000
     PHYLO_N_STEPS = 200
     PHYLO_N_SITES = 3
-    PHYLO_MUTATION_RATE = 5e-3
+    PHYLO_MUTATION_RATE = 1e-3
 
     phylo_df, phylogeny_df = simulate(
         MUTATION_RATE=PHYLO_MUTATION_RATE,
@@ -583,22 +583,61 @@ def plot_phylogeny(
         for strain in pruned_df["strain"]
     ]
 
-    # Strain prevalence series: any Strain_* column in the timeseries gets
-    # stacked, in the same Hamming-weight ordering as the palette.
+    # Per-strain prevalence series, in the same Hamming-weight order as the
+    # palette. Time is the y-axis (negated so it matches the iplotx vertical
+    # tree layout, where origin_time runs from 0 at the root downwards).
     strain_cols = [
         f"Strain_{s}" for s in all_strains if f"Strain_{s}" in phylo_df.columns
     ]
     stack_strains = [c[len("Strain_") :] for c in strain_cols]
     steps = phylo_df["Step"].to_numpy()
-    layers = np.stack([phylo_df[c].to_numpy() for c in strain_cols], axis=0)
-    layer_colors = [palette[s] for s in stack_strains]
+    y_steps = -steps
+    strain_layers = np.stack(
+        [phylo_df[c].to_numpy() for c in strain_cols], axis=0
+    )
+    strain_colors = [palette[s] for s in stack_strains]
+
+    # Per-Hamming-weight aggregation, normalized so each row sums to 1
+    # (space-filling stackplot).
+    hw_values = sorted({s.count("1") for s in stack_strains})
+    hw_palette = sns.color_palette("rocket_r", len(hw_values))
+    hw_layers = np.stack(
+        [
+            np.sum(
+                [
+                    phylo_df[f"Strain_{s}"].to_numpy()
+                    for s in stack_strains
+                    if s.count("1") == w
+                ],
+                axis=0,
+            )
+            for w in hw_values
+        ],
+        axis=0,
+    )
+    hw_totals = hw_layers.sum(axis=0)
+    hw_layers_norm = np.where(hw_totals > 0, hw_layers / hw_totals, 0.0)
+
+    def _fill_horiz(ax, layers, colors):
+        """Stackplot variant with time on the y-axis."""
+        prev = np.zeros_like(layers[0])
+        for layer, color in zip(layers, colors):
+            cur = prev + layer
+            ax.fill_betweenx(y_steps, prev, cur, color=color, edgecolor="none")
+            prev = cur
+
+    from matplotlib.ticker import FuncFormatter
 
     with tp.teed(
         pyplot_phylo.subplots,
         nrows=1,
-        ncols=2,
-        figsize=(11, 6),
-        gridspec_kw={"width_ratios": [1.1, 1.0]},
+        ncols=3,
+        figsize=(10, 7),
+        gridspec_kw={
+            "width_ratios": [1.4, 1.0, 1.0],
+            "wspace": 0.05,
+        },
+        sharey=True,
         teeplot_outattrs={
             "what": "phylogeny",
             "n_sites": PHYLO_N_SITES,
@@ -606,47 +645,69 @@ def plot_phylogeny(
         teeplot_show=True,
         teeplot_subdir=pathlib.Path(__file__).stem,
     ) as (fig, axes):
-        ax_tree, ax_stack = axes
+        ax_tree, ax_strain, ax_hw = axes
 
         ipx.tree(
             pfl.alifestd_to_iplotx_pandas(pruned_df),
             ax=ax_tree,
-            layout="horizontal",
+            layout="vertical",
             vertex_color=vertex_colors,
-            vertex_size=8,
+            vertex_size=5,
             edge_linewidth=0.7,
             margins=0.05,
+            strip_axes=False,
         )
-        ax_tree.set_title("pathogen phylogeny (downsampled tips)")
 
-        ax_stack.stackplot(
-            steps,
-            layers,
-            colors=layer_colors,
-            labels=[f"strain {s}" for s in stack_strains],
+        _fill_horiz(ax_strain, strain_layers, strain_colors)
+        ax_strain.set_xlim(0, strain_layers.sum(axis=0).max() * 1.02)
+
+        _fill_horiz(ax_hw, hw_layers_norm, hw_palette)
+        ax_hw.set_xlim(0, 1)
+
+        # Time axis lives on the leftmost panel; show positive step numbers
+        # even though the underlying coordinate is negated to align with the
+        # iplotx layout.
+        ax_tree.set_ylabel("step")
+        ax_tree.yaxis.set_major_formatter(
+            FuncFormatter(lambda v, _pos: f"{abs(int(round(-v)))}"),
         )
-        ax_stack.set_xlim(steps.min(), steps.max())
-        ax_stack.set_ylim(0, layers.sum(axis=0).max() * 1.02)
-        ax_stack.set_xlabel("Step")
-        ax_stack.set_ylabel("Prevalence")
-        ax_stack.set_title("composition by Hamming weight")
-        ax_stack.grid(True, alpha=0.3)
+        ax_tree.tick_params(left=True, labelleft=True)
+        for ax in (ax_strain, ax_hw):
+            ax.tick_params(labelleft=False, left=False)
 
-        # Single shared legend at the right edge, ordered by Hamming weight.
-        legend_handles = [
+        sns.despine(ax=ax_tree, top=True, right=True, bottom=True)
+        ax_tree.tick_params(bottom=False, labelbottom=False)
+        sns.despine(ax=ax_strain, left=True)
+        sns.despine(ax=ax_hw, left=True)
+
+        # Single shared legend grouping strains by Hamming weight; HW bands
+        # use a sequential palette so darker = more "1" alleles.
+        strain_handles = [
             pyplot_phylo.Line2D(
                 [0],
                 [0],
                 marker="o",
                 color="w",
                 markerfacecolor=palette[s],
-                markersize=8,
-                label=f"strain {s} (Ham. wt. {s.count('1')})",
+                markersize=6,
+                label=f"strain {s} (HW {s.count('1')})",
             )
             for s in all_strains
         ]
-        ax_stack.legend(
-            handles=legend_handles,
+        hw_handles = [
+            pyplot_phylo.Line2D(
+                [0],
+                [0],
+                marker="s",
+                color="w",
+                markerfacecolor=hw_palette[i],
+                markersize=8,
+                label=f"HW {w}",
+            )
+            for i, w in enumerate(hw_values)
+        ]
+        ax_hw.legend(
+            handles=strain_handles + hw_handles,
             loc="center left",
             bbox_to_anchor=(1.02, 0.5),
             frameon=False,
