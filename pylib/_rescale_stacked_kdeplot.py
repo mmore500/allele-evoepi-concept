@@ -97,8 +97,7 @@ def rescale_stacked_kdeplot(
         Height-axis scale to render onto. Only ``"log"`` is implemented;
         any other value raises ``NotImplementedError``.
     vmin
-        Bottom of the log axis; must be > 0. Defaults to
-        ``max(total) / 1000`` — roughly three decades of range.
+        Bottom of the log axis; must be > 0. Defaults to ``1``.
 
     Returns
     -------
@@ -123,7 +122,7 @@ def rescale_stacked_kdeplot(
     contribs = [hi - lo for (_, lo, hi) in band_curves]
 
     if vmin is None:
-        vmin = max(float(totals.max()) / 1000.0, 1e-12)
+        vmin = 1.0
     elif vmin <= 0:
         raise ValueError("vmin must be > 0")
 

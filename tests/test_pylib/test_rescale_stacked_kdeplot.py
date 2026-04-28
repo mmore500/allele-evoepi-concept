@@ -100,6 +100,13 @@ def test_default_scale_is_log():
     plt.close(fig)
 
 
+def test_default_vmin_is_one():
+    fig, ax = _make_stacked_kde()
+    rescale_stacked_kdeplot(ax, "x")
+    assert ax.get_ylim()[0] == pytest.approx(1.0)
+    plt.close(fig)
+
+
 def test_vmin_overrides_default():
     fig, ax = _make_stacked_kde()
     rescale_stacked_kdeplot(ax, orient="x", vmin=1e-3)
