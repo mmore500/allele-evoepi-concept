@@ -490,7 +490,7 @@ def run_phylogeny_simulation(simulate):
         POP_SIZE=PHYLO_POP_SIZE,
         CONTACT_RATE=0.35,
         RECOVERY_RATE=0.1,
-        WANING_RATE=0.005,
+        WANING_RATE=0.02,
         IMMUNE_STRENGTH=0.7,
         SEED_COUNT=2,
         IMMUNITY_FLOOR=0.05,
@@ -573,28 +573,33 @@ def plot_phylogeny(
         ),
     )
 
-    # With 2**N_SITES potential strains (1024 at N_SITES=10) per-strain colors
-    # become unworkable; instead key one sequential palette on Hamming weight,
-    # then map every strain (and every tip) to its corresponding HW color.
+    # All possible bit strings of length N_SITES, sorted by Hamming weight
+    # then lexicographically.
     all_strains = sorted(
         (format(g, fmt)[::-1] for g in range(2**PHYLO_N_SITES)),
         key=lambda s: (s.count("1"), s),
     )
     hw_values = list(range(PHYLO_N_SITES + 1))
     hw_palette = sns.color_palette("rocket_r", len(hw_values))
-    palette = {s: hw_palette[s.count("1")] for s in all_strains}
+
+    # Tip dots: per-strain palette so siblings sharing a strain land on the
+    # same color even when the tree spans many distinct genomes. `husl` gives
+    # 2**N_SITES maximally-distinct hues.
+    strain_palette = dict(
+        zip(all_strains, sns.color_palette("husl", len(all_strains))),
+    )
 
     # iplotx accepts vertex_color as a positional list aligned to rows of the
     # phyloframe shim; pass hex strings to keep matplotlib happy. The synthetic
     # global root has no strain → render it as neutral gray.
     vertex_colors = [
-        "#cccccc" if strain is None else mcolors.to_hex(palette[strain])
-        for strain in pruned_df["strain"]
+        "#cccccc" if s is None else mcolors.to_hex(strain_palette[s])
+        for s in pruned_df["strain"]
     ]
 
-    # Per-strain prevalence series, in the same Hamming-weight order as the
-    # palette. Time is the y-axis (negated so it matches the iplotx vertical
-    # tree layout, where origin_time runs from 0 at the root downwards).
+    # Per-strain prevalence series for the absolute stackplot. Each band keeps
+    # its strain hue from the husl palette; ordering by HW then lex still
+    # clusters strains with the same Hamming weight together visually.
     strain_cols = [
         f"Strain_{s}" for s in all_strains if f"Strain_{s}" in phylo_df.columns
     ]
@@ -604,7 +609,7 @@ def plot_phylogeny(
     strain_layers = np.stack(
         [phylo_df[c].to_numpy() for c in strain_cols], axis=0
     )
-    strain_colors = [palette[s] for s in stack_strains]
+    strain_colors = [strain_palette[s] for s in stack_strains]
 
     # Per-Hamming-weight aggregation, normalized so each row sums to 1
     # (space-filling stackplot).
