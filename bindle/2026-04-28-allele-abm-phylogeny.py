@@ -566,7 +566,7 @@ def def_make_phylogeny_plot(
         # Tip dots and strain stackplot bands share this husl palette so
         # tip color matches the band color of its strain at any timestep.
         strain_palette = dict(
-            zip(all_strains, sns.color_palette("husl", len(all_strains))),
+            zip(all_strains, sns.color_palette("rainbow", len(all_strains))),
         )
         vertex_colors = [
             "#cccccc" if s is None else mcolors.to_hex(strain_palette[s])
