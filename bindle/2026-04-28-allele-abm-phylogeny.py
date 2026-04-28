@@ -55,8 +55,7 @@ def import_pkg():
 
 @app.cell(hide_code=True)
 def do_watermark(mo, watermark):
-    mo.md(
-        f"""
+    mo.md(f"""
     ```Text
     {watermark(
         current_date=True,
@@ -68,8 +67,7 @@ def do_watermark(mo, watermark):
         globals_=globals(),
     )}
     ```
-    """
-    )
+    """)
     return
 
 
@@ -82,11 +80,9 @@ def configure_backend(cp, np):
 
 @app.cell(hide_code=True)
 def delimit_simulation(mo):
-    mo.md(
-        """
+    mo.md("""
     ## Simulation Implementation
-    """
-    )
+    """)
     return
 
 
@@ -488,8 +484,7 @@ def def_simulate(Dict, List, Sequence, Tuple, Union, np, pd, random, tqdm, xp):
 
 @app.cell(hide_code=True)
 def delimit_phylogeny(mo):
-    mo.md(
-        """
+    mo.md("""
     ## Exact Phylogeny Tracking
 
     Sweep `N_SITES` over a few values to compare phylogeny shapes; for each
@@ -498,8 +493,7 @@ def delimit_phylogeny(mo):
     absolute stackplot share a per-strain `husl` palette; the space-filling
     stackplot to the right groups strains by Hamming weight so bit-weight
     composition reads bottom-to-top.
-    """
-    )
+    """)
     return
 
 
@@ -777,15 +771,13 @@ def run_phylogeny_sweep(make_phylogeny_plot, simulate):
 
 @app.cell(hide_code=True)
 def delimit_long_run(mo):
-    mo.md(
-        """
+    mo.md("""
     ### Extended N_SITES = 16 Run
 
     Same baseline params as the sweep but stretched 10× along the time
     axis (12 000 steps, figure 10× as tall) so the long-horizon strain
     turnover and Hamming-weight drift are legible.
-    """
-    )
+    """)
     return
 
 
