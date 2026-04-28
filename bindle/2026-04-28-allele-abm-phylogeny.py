@@ -510,6 +510,7 @@ def def_make_phylogeny_plot(
     mcolors,
     np,
     pathlib,
+    pd,
     pfl,
     plt,
     sns,
@@ -579,8 +580,6 @@ def def_make_phylogeny_plot(
         strain_layers = np.stack(
             [phylo_df[c].to_numpy() for c in strain_cols], axis=0
         )
-        strain_colors = [strain_palette[s] for s in stack_strains]
-
         hw_layers = np.stack(
             [
                 np.sum(
@@ -596,18 +595,6 @@ def def_make_phylogeny_plot(
             ],
             axis=0,
         )
-        hw_totals = hw_layers.sum(axis=0)
-        hw_layers_norm = np.where(hw_totals > 0, hw_layers / hw_totals, 0.0)
-
-        def _fill_horiz(ax, layers, colors):
-            prev = np.zeros_like(layers[0])
-            for layer, color in zip(layers, colors):
-                cur = prev + layer
-                ax.fill_betweenx(
-                    y_steps, prev, cur, color=color, edgecolor="none"
-                )
-                prev = cur
-
         # Top-5 "final" = extant viral population at end of simulation:
         # phylogeny tips marked extant (= currently-infected hosts) ranked
         # by their bit-string genome count. Top-5 "overall" stays as the
