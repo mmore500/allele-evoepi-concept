@@ -521,6 +521,7 @@ def def_make_phylogeny_plot(
         phylogeny_df,
         max_tips: int = 10_000,
         height_scale: float = 1.0,
+        seed: int = 0,
     ) -> None:
         # Keep extinct lineages — uniform tip downsampling + unifurcation
         # collapse is enough to keep the rendered tree legible. Synthetic
@@ -607,35 +608,90 @@ def def_make_phylogeny_plot(
                 )
                 prev = cur
 
+        # Top-5 "final" = extant viral population at end of simulation:
+        # phylogeny tips marked extant (= currently-infected hosts) ranked
+        # by their bit-string genome count. Top-5 "overall" stays as the
+        # integrated-prevalence ranking over the whole run.
+        extant_strain_counts = (
+            phylogeny_df.loc[phylogeny_df["extant"].astype(bool), "genome"]
+            .astype(int)
+            .map(lambda g: format(int(g), fmt)[::-1])
+            .value_counts()
+        )
+        top_final = extant_strain_counts.head(5).index.tolist()
+        overall_totals = strain_layers.sum(axis=1)
+        top_overall = [
+            stack_strains[i] for i in np.argsort(overall_totals)[::-1][:5]
+        ]
+
+        # Cross-sample the HW legend so it never has more than 4 entries:
+        # keep an evenly-spaced subset across [0, N_SITES].
+        if len(hw_values) > 4:
+            _idx = np.unique(
+                np.linspace(0, len(hw_values) - 1, 4).round().astype(int)
+            ).tolist()
+        else:
+            _idx = list(range(len(hw_values)))
+        hw_legend_entries = [(i, hw_values[i]) for i in _idx]
+
+        def _wrap(s, width=8):
+            return "\n".join(s[i : i + width] for i in range(0, len(s), width))
+
+        def _strain_handle(s):
+            return plt.Line2D(
+                [0],
+                [0],
+                marker="o",
+                color="w",
+                markerfacecolor=mcolors.to_hex(strain_palette[s]),
+                markersize=8,
+                label=f"{_wrap(s)}\n(HW {s.count('1')})",
+            )
+
+        def _hw_handle(i, w):
+            return plt.Line2D(
+                [0],
+                [0],
+                marker="s",
+                color="w",
+                markerfacecolor=hw_palette[i],
+                markersize=10,
+                label=f"HW {w}",
+            )
+
         with tp.teed(
             plt.subplots,
-            nrows=1,
+            nrows=2,
             ncols=3,
-            # Grow vertically with N_SITES so the HW legend (N_SITES+1
-            # entries) plus the two top-strain legends still fit on the
-            # right margin without overlap; height_scale stretches the
-            # tree+stackplots when running over a longer time window.
-            figsize=(12, height_scale * max(7, 4.5 + 0.4 * N_SITES)),
+            # Grow vertically with N_SITES; reserve a slim bottom row for
+            # the three legends sitting in their own axes (overall on the
+            # left, final in the centre, Hamming weights on the right).
+            figsize=(12, height_scale * max(7, 4.5 + 0.4 * N_SITES) + 2.5),
             gridspec_kw={
                 "width_ratios": [1.4, 1.0, 1.0],
-                "wspace": 0.05,
+                "height_ratios": [10, 2.5],
+                "wspace": 0.1,
+                "hspace": 0.06,
             },
-            sharey=True,
+            sharey="row",
             teeplot_outattrs={
                 "what": "phylogeny",
                 "n_sites": N_SITES,
                 "n_steps": int(phylo_df["Step"].max()) + 1,
+                "seed": seed,
             },
             teeplot_show=True,
             teeplot_subdir=pathlib.Path(__file__).stem,
         ) as (fig, axes):
-            ax_tree, ax_strain, ax_hw = axes
+            ax_tree, ax_strain, ax_hw = axes[0]
+            ax_leg_overall, ax_leg_final, ax_leg_hw = axes[1]
 
             ipx.tree(
                 pfl.alifestd_to_iplotx_pandas(pruned_df),
                 ax=ax_tree,
                 layout="vertical",
                 vertex_color=vertex_colors,
+                vertex_alpha=0.5,
                 vertex_size=5,
                 vertex_zorder=3,
                 edge_color="gray",
@@ -651,11 +707,10 @@ def def_make_phylogeny_plot(
             _fill_horiz(ax_hw, hw_layers_norm, hw_palette)
             ax_hw.set_xlim(0, 1)
 
-            # Overplot strain bands as thin medium-dark-gray no-fill lines so
-            # individual strains are legible inside their HW band; strains
-            # are HW-then-lex-sorted so cumsum positions land within their
-            # parent HW region. Then overplot the HW boundaries with a
-            # slightly thicker white line to clearly divide HW regions.
+            # Overplot strain bands as thin medium-dark-gray no-fill lines
+            # at 50% alpha so individual strains are legible inside their
+            # HW band without overpowering the fill; HW boundaries then
+            # overplotted with a thicker white line to delimit HW regions.
             _strain_total = strain_layers.sum(axis=0)
             _strain_layers_norm = np.where(
                 _strain_total > 0,
@@ -668,6 +723,7 @@ def def_make_phylogeny_plot(
                     _strain_cum[_i],
                     y_steps,
                     color="#555555",
+                    alpha=0.5,
                     linewidth=0.3,
                     zorder=2,
                 )
@@ -683,7 +739,9 @@ def def_make_phylogeny_plot(
 
             # Time axis lives on the leftmost panel; show positive step
             # numbers even though the underlying coordinate is negated to
-            # align with the iplotx layout.
+            # align with the iplotx layout. Stackplot x-axes move to the
+            # top so the time-flow direction reads consistently with the
+            # tree.
             ax_tree.set_ylabel("step")
             ax_tree.yaxis.set_major_formatter(
                 FuncFormatter(lambda v, _pos: f"{abs(int(round(-v)))}"),
@@ -691,83 +749,42 @@ def def_make_phylogeny_plot(
             ax_tree.tick_params(left=True, labelleft=True)
             for ax in (ax_strain, ax_hw):
                 ax.tick_params(labelleft=False, left=False)
+                ax.xaxis.tick_top()
+                ax.xaxis.set_label_position("top")
 
             sns.despine(ax=ax_tree, top=True, right=True, bottom=True)
             ax_tree.tick_params(bottom=False, labelbottom=False)
-            sns.despine(ax=ax_strain, left=True)
-            sns.despine(ax=ax_hw, left=True)
+            sns.despine(ax=ax_strain, left=True, bottom=True, top=False)
+            sns.despine(ax=ax_hw, left=True, bottom=True, top=False)
 
-            # Top-5 final vs overall strains by integrated prevalence; the
-            # "final" window is the last 10% of timesteps so it captures
-            # whichever lineages currently dominate the population.
-            n_final = max(1, len(steps) // 10)
-            final_totals = strain_layers[:, -n_final:].sum(axis=1)
-            overall_totals = strain_layers.sum(axis=1)
-            top_final = [
-                stack_strains[i] for i in np.argsort(final_totals)[::-1][:5]
-            ]
-            top_overall = [
-                stack_strains[i] for i in np.argsort(overall_totals)[::-1][:5]
-            ]
-
-            def _wrap(s, width=8):
-                return "\n".join(
-                    s[i : i + width] for i in range(0, len(s), width)
-                )
-
-            def _strain_handle(s):
-                return plt.Line2D(
-                    [0],
-                    [0],
-                    marker="o",
-                    color="w",
-                    markerfacecolor=mcolors.to_hex(strain_palette[s]),
-                    markersize=8,
-                    label=f"{_wrap(s)}\n(HW {s.count('1')})",
-                )
-
-            final_lo = int(steps[-n_final])
             final_hi = int(steps[-1])
-            leg_final = ax_hw.legend(
-                handles=[_strain_handle(s) for s in top_final],
-                title=f"top 5 final\n(steps {final_lo}–{final_hi})",
-                loc="upper left",
-                bbox_to_anchor=(1.02, 1.0),
-                frameon=False,
-            )
-            ax_hw.add_artist(leg_final)
-
-            leg_ovr = ax_hw.legend(
-                handles=[_strain_handle(s) for s in top_overall],
-                title="top 5 overall",
-                loc="center left",
-                bbox_to_anchor=(1.02, 0.55),
-                frameon=False,
-            )
-            ax_hw.add_artist(leg_ovr)
-
-            # Hamming-weight legend for the space-filling panel
-            # (sequential rocket_r palette: darker = more "1" alleles).
-            hw_handles = [
-                plt.Line2D(
-                    [0],
-                    [0],
-                    marker="s",
-                    color="w",
-                    markerfacecolor=hw_palette[i],
-                    markersize=8,
-                    label=f"HW {w}",
+            for ax_leg, handles, title in (
+                (
+                    ax_leg_overall,
+                    [_strain_handle(s) for s in top_overall],
+                    "top 5 overall",
+                ),
+                (
+                    ax_leg_final,
+                    [_strain_handle(s) for s in top_final],
+                    f"top 5 final (extant @ step {final_hi})",
+                ),
+                (
+                    ax_leg_hw,
+                    [_hw_handle(i, w) for i, w in hw_legend_entries],
+                    "Hamming weight",
+                ),
+            ):
+                ax_leg.set_axis_off()
+                ax_leg.legend(
+                    handles=handles,
+                    title=title,
+                    loc="center",
+                    ncol=len(handles),
+                    frameon=False,
+                    handletextpad=0.4,
+                    columnspacing=1.0,
                 )
-                for i, w in enumerate(hw_values)
-            ]
-            ax_hw.legend(
-                handles=hw_handles,
-                title="Hamming\nweight",
-                loc="lower left",
-                bbox_to_anchor=(1.02, 0.0),
-                frameon=False,
-            )
-            fig.tight_layout()
 
     return (make_phylogeny_plot,)
 
@@ -783,30 +800,37 @@ def run_phylogeny_sweep(make_phylogeny_plot, simulate):
     PHYLO_N_STEPS = 1_200
     PHYLO_MUTATION_RATE = 5e-5
 
-    # Underscored locals so marimo treats these as cell-private (the long
-    # run cell also needs to bind phylo_df / phylogeny_df).
-    for PHYLO_N_SITES in (2, 4, 8, 16):
-        print(f"=== N_SITES={PHYLO_N_SITES} ===")
-        _phylo_df, _phylogeny_df = simulate(
-            MUTATION_RATE=PHYLO_MUTATION_RATE,
-            N_SITES=PHYLO_N_SITES,
-            N_STEPS=PHYLO_N_STEPS,
-            POP_SIZE=PHYLO_POP_SIZE,
-            CONTACT_RATE=0.35,
-            RECOVERY_RATE=0.1,
-            WANING_RATE=0.02,
-            IMMUNE_STRENGTH=0.7,
-            SEED_COUNT=2,
-            IMMUNITY_FLOOR=0.05,
-            IMMUNITY_CEILING=1.0,
-            seed=2,
-            track_phylogeny=True,
-        )
-        print(f"  phylogeny: {len(_phylogeny_df)} total nodes")
-        print(f"  extant tips: {_phylogeny_df['extant'].sum()}")
-        make_phylogeny_plot(PHYLO_N_SITES, _phylo_df, _phylogeny_df)
-        # Free large per-iteration buffers before the next run.
-        del _phylo_df, _phylogeny_df
+    # 3 replicates per N_SITES: outer seed, inner N_SITES so each plot
+    # filename gets seed+n_sites in its teeplot outattrs and replicates
+    # don't clobber each other.
+    for _seed in (1, 2, 3):
+        for PHYLO_N_SITES in (2, 4, 8, 16):
+            print(f"=== seed={_seed} N_SITES={PHYLO_N_SITES} ===")
+            _phylo_df, _phylogeny_df = simulate(
+                MUTATION_RATE=PHYLO_MUTATION_RATE,
+                N_SITES=PHYLO_N_SITES,
+                N_STEPS=PHYLO_N_STEPS,
+                POP_SIZE=PHYLO_POP_SIZE,
+                CONTACT_RATE=0.35,
+                RECOVERY_RATE=0.1,
+                WANING_RATE=0.02,
+                IMMUNE_STRENGTH=0.7,
+                SEED_COUNT=2,
+                IMMUNITY_FLOOR=0.05,
+                IMMUNITY_CEILING=1.0,
+                seed=_seed,
+                track_phylogeny=True,
+            )
+            print(f"  phylogeny: {len(_phylogeny_df)} total nodes")
+            print(f"  extant tips: {_phylogeny_df['extant'].sum()}")
+            make_phylogeny_plot(
+                PHYLO_N_SITES,
+                _phylo_df,
+                _phylogeny_df,
+                seed=_seed,
+            )
+            # Free large per-iteration buffers before the next run.
+            del _phylo_df, _phylogeny_df
     return
 
 
