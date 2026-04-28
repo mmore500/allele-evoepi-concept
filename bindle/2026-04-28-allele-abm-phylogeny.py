@@ -651,6 +651,36 @@ def def_make_phylogeny_plot(
             _fill_horiz(ax_hw, hw_layers_norm, hw_palette)
             ax_hw.set_xlim(0, 1)
 
+            # Overplot strain bands as thin medium-dark-gray no-fill lines so
+            # individual strains are legible inside their HW band; strains
+            # are HW-then-lex-sorted so cumsum positions land within their
+            # parent HW region. Then overplot the HW boundaries with a
+            # slightly thicker white line to clearly divide HW regions.
+            _strain_total = strain_layers.sum(axis=0)
+            _strain_layers_norm = np.where(
+                _strain_total > 0,
+                strain_layers / _strain_total,
+                0.0,
+            )
+            _strain_cum = np.cumsum(_strain_layers_norm, axis=0)
+            for _i in range(len(_strain_cum) - 1):
+                ax_hw.plot(
+                    _strain_cum[_i],
+                    y_steps,
+                    color="#555555",
+                    linewidth=0.3,
+                    zorder=2,
+                )
+            _hw_cum = np.cumsum(hw_layers_norm, axis=0)
+            for _i in range(len(_hw_cum) - 1):
+                ax_hw.plot(
+                    _hw_cum[_i],
+                    y_steps,
+                    color="white",
+                    linewidth=1.2,
+                    zorder=3,
+                )
+
             # Time axis lives on the leftmost panel; show positive step
             # numbers even though the underlying coordinate is negated to
             # align with the iplotx layout.
@@ -680,6 +710,11 @@ def def_make_phylogeny_plot(
                 stack_strains[i] for i in np.argsort(overall_totals)[::-1][:5]
             ]
 
+            def _wrap(s, width=8):
+                return "\n".join(
+                    s[i : i + width] for i in range(0, len(s), width)
+                )
+
             def _strain_handle(s):
                 return plt.Line2D(
                     [0],
@@ -688,14 +723,14 @@ def def_make_phylogeny_plot(
                     color="w",
                     markerfacecolor=mcolors.to_hex(strain_palette[s]),
                     markersize=8,
-                    label=f"strain {s} (HW {s.count('1')})",
+                    label=f"{_wrap(s)}\n(HW {s.count('1')})",
                 )
 
             final_lo = int(steps[-n_final])
             final_hi = int(steps[-1])
             leg_final = ax_hw.legend(
                 handles=[_strain_handle(s) for s in top_final],
-                title=f"top 5 final strains (steps {final_lo}–{final_hi})",
+                title=f"top 5 final\n(steps {final_lo}–{final_hi})",
                 loc="upper left",
                 bbox_to_anchor=(1.02, 1.0),
                 frameon=False,
@@ -704,7 +739,7 @@ def def_make_phylogeny_plot(
 
             leg_ovr = ax_hw.legend(
                 handles=[_strain_handle(s) for s in top_overall],
-                title="top 5 overall strains",
+                title="top 5 overall",
                 loc="center left",
                 bbox_to_anchor=(1.02, 0.55),
                 frameon=False,
@@ -727,7 +762,7 @@ def def_make_phylogeny_plot(
             ]
             ax_hw.legend(
                 handles=hw_handles,
-                title="Hamming weight",
+                title="Hamming\nweight",
                 loc="lower left",
                 bbox_to_anchor=(1.02, 0.0),
                 frameon=False,
@@ -772,58 +807,6 @@ def run_phylogeny_sweep(make_phylogeny_plot, simulate):
         make_phylogeny_plot(PHYLO_N_SITES, _phylo_df, _phylogeny_df)
         # Free large per-iteration buffers before the next run.
         del _phylo_df, _phylogeny_df
-    return
-
-
-@app.cell(hide_code=True)
-def delimit_long_run(mo):
-    mo.md(
-        """
-    ### Extended N_SITES = 16 Run
-
-    Same baseline params as the sweep but stretched 10× along the time
-    axis (12 000 steps, figure 10× as tall) so the long-horizon strain
-    turnover and Hamming-weight drift are legible.
-    """
-    )
-    return
-
-
-@app.cell
-def run_phylogeny_long(make_phylogeny_plot, simulate):
-    LONG_N_SITES = 16
-    LONG_N_STEPS = 12_000
-    # Down-scale population so the 12 000-step phylogeny tracker fits in
-    # CI memory (16 GB); the qualitative drift / turnover dynamics at this
-    # mutation rate look the same at lower N.
-    LONG_POP_SIZE = 20_000
-    LONG_MUTATION_RATE = 5e-5
-
-    print(f"=== long run: N_SITES={LONG_N_SITES}, N_STEPS={LONG_N_STEPS} ===")
-    _phylo_df, _phylogeny_df = simulate(
-        MUTATION_RATE=LONG_MUTATION_RATE,
-        N_SITES=LONG_N_SITES,
-        N_STEPS=LONG_N_STEPS,
-        POP_SIZE=LONG_POP_SIZE,
-        CONTACT_RATE=0.35,
-        RECOVERY_RATE=0.1,
-        WANING_RATE=0.02,
-        IMMUNE_STRENGTH=0.7,
-        SEED_COUNT=2,
-        IMMUNITY_FLOOR=0.05,
-        IMMUNITY_CEILING=1.0,
-        seed=2,
-        track_phylogeny=True,
-    )
-    print(f"  phylogeny: {len(_phylogeny_df)} total nodes")
-    print(f"  extant tips: {_phylogeny_df['extant'].sum()}")
-    make_phylogeny_plot(
-        LONG_N_SITES,
-        _phylo_df,
-        _phylogeny_df,
-        height_scale=10.0,
-    )
-    del _phylo_df, _phylogeny_df
     return
 
 
