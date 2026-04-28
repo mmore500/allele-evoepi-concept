@@ -562,7 +562,7 @@ def def_make_phylogeny_plot(
         # Tip dots and strain stackplot bands share this husl palette so
         # tip color matches the band color of its strain at any timestep.
         strain_palette = dict(
-            zip(all_strains, sns.color_palette("husl", len(all_strains))),
+            zip(all_strains, sns.color_palette("rainbow", len(all_strains))),
         )
         vertex_colors = [
             "#cccccc" if s is None else mcolors.to_hex(strain_palette[s])
@@ -605,10 +605,10 @@ def def_make_phylogeny_plot(
             .map(lambda g: format(int(g), fmt)[::-1])
             .value_counts()
         )
-        top_final = extant_strain_counts.head(5).index.tolist()
+        top_final = extant_strain_counts.head(6).index.tolist()
         overall_totals = strain_layers.sum(axis=1)
         top_overall = [
-            stack_strains[i] for i in np.argsort(overall_totals)[::-1][:5]
+            stack_strains[i] for i in np.argsort(overall_totals)[::-1][:6]
         ]
 
         # Cross-sample the HW legend so it never has more than 4 entries:
@@ -738,6 +738,7 @@ def def_make_phylogeny_plot(
                 weights="w",
                 multiple="fill",
                 common_norm=True,
+                cut=0,
                 palette={
                     _hw_str[i]: hw_palette[i] for i in range(len(hw_values))
                 },
@@ -760,6 +761,7 @@ def def_make_phylogeny_plot(
                 weights="w",
                 multiple="fill",
                 common_norm=True,
+                cut=0,
                 palette={s: "#555555" for s in stack_strains},
                 ax=ax_hw,
                 fill=False,
@@ -777,6 +779,7 @@ def def_make_phylogeny_plot(
                 weights="w",
                 multiple="fill",
                 common_norm=True,
+                cut=0,
                 palette={s: "white" for s in _hw_str},
                 ax=ax_hw,
                 fill=False,
@@ -812,17 +815,16 @@ def def_make_phylogeny_plot(
             sns.despine(ax=ax_strain, left=True, bottom=True, top=False)
             sns.despine(ax=ax_hw, left=True, bottom=True, top=False)
 
-            final_hi = int(steps[-1])
             for ax_leg, handles, title in (
                 (
                     ax_leg_overall,
                     [_strain_handle(s) for s in top_overall],
-                    "top 5 overall",
+                    "top 6 overall",
                 ),
                 (
                     ax_leg_final,
                     [_strain_handle(s) for s in top_final],
-                    f"top 5 final (extant @ step {final_hi})",
+                    "top 6 extant",
                 ),
                 (
                     ax_leg_hw,
@@ -852,8 +854,8 @@ def run_phylogeny_sweep(make_phylogeny_plot, simulate):
     # at the original 0.005 immunity saturates and larger genome runs go
     # extinct before the dynamics settle.
     PHYLO_POP_SIZE = 200_000
-    PHYLO_N_STEPS = 1_200
-    PHYLO_MUTATION_RATE = 5e-5
+    PHYLO_N_STEPS = 2_000
+    PHYLO_MUTATION_RATE = 1e-5
 
     # 3 replicates per N_SITES: outer seed, inner N_SITES so each plot
     # filename gets seed+n_sites in its teeplot outattrs and replicates
