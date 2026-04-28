@@ -738,6 +738,7 @@ def def_make_phylogeny_plot(
                 weights="w",
                 multiple="fill",
                 common_norm=True,
+                cut=0,
                 palette={
                     _hw_str[i]: hw_palette[i] for i in range(len(hw_values))
                 },
@@ -760,6 +761,7 @@ def def_make_phylogeny_plot(
                 weights="w",
                 multiple="fill",
                 common_norm=True,
+                cut=0,
                 palette={s: "#555555" for s in stack_strains},
                 ax=ax_hw,
                 fill=False,
@@ -777,6 +779,7 @@ def def_make_phylogeny_plot(
                 weights="w",
                 multiple="fill",
                 common_norm=True,
+                cut=0,
                 palette={s: "white" for s in _hw_str},
                 ax=ax_hw,
                 fill=False,
@@ -812,7 +815,6 @@ def def_make_phylogeny_plot(
             sns.despine(ax=ax_strain, left=True, bottom=True, top=False)
             sns.despine(ax=ax_hw, left=True, bottom=True, top=False)
 
-            final_hi = int(steps[-1])
             for ax_leg, handles, title in (
                 (
                     ax_leg_overall,
@@ -822,7 +824,7 @@ def def_make_phylogeny_plot(
                 (
                     ax_leg_final,
                     [_strain_handle(s) for s in top_final],
-                    f"top 6 final (extant @ step {final_hi})",
+                    "top 6 extant",
                 ),
                 (
                     ax_leg_hw,
@@ -852,8 +854,8 @@ def run_phylogeny_sweep(make_phylogeny_plot, simulate):
     # at the original 0.005 immunity saturates and larger genome runs go
     # extinct before the dynamics settle.
     PHYLO_POP_SIZE = 200_000
-    PHYLO_N_STEPS = 1_200
-    PHYLO_MUTATION_RATE = 5e-5
+    PHYLO_N_STEPS = 2_000
+    PHYLO_MUTATION_RATE = 1e-5
 
     # 3 replicates per N_SITES: outer seed, inner N_SITES so each plot
     # filename gets seed+n_sites in its teeplot outattrs and replicates
