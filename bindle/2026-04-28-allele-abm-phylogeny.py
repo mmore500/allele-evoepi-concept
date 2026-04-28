@@ -20,15 +20,37 @@ def import_pkg():
     except ImportError:
         import numpy as cp
 
+    # workaround: iplotx 1.7.x uses importlib.metadata without importing it
+    import importlib.metadata  # noqa: F401
+
+    import iplotx as ipx
     import marimo as mo
+    import matplotlib.colors as mcolors
+    import matplotlib.pyplot as plt
+    from matplotlib.ticker import FuncFormatter
     import numpy as np
     import pandas as pd
+    from phyloframe import legacy as pfl
     import seaborn as sns
     from teeplot import teeplot as tp
     from tqdm.auto import tqdm
     from watermark import watermark
 
-    return cp, mo, np, pd, sns, tp, tqdm, watermark
+    return (
+        FuncFormatter,
+        cp,
+        ipx,
+        mcolors,
+        mo,
+        np,
+        pd,
+        pfl,
+        plt,
+        sns,
+        tp,
+        tqdm,
+        watermark,
+    )
 
 
 @app.cell(hide_code=True)
@@ -393,7 +415,7 @@ def def_simulate(Dict, List, Sequence, Tuple, Union, np, pd, random, tqdm, xp):
         )
         data_log: List[Dict[str, float]] = []
 
-        for t in tqdm(range(N_STEPS)):
+        for t in tqdm(range(N_STEPS), mininterval=20.0):
             (
                 host_statuses,
                 pathogen_genomes,
@@ -470,260 +492,276 @@ def delimit_phylogeny(mo):
         """
     ## Exact Phylogeny Tracking
 
-    Run an example with `track_phylogeny=True` to record an alife-standard
-    phylogeny (`id` / `ancestor_id` / `origin_time`) of pathogen lineages,
-    including extinct lineages, then visualize with `iplotx`.
+    Sweep `N_SITES` over a few values to compare phylogeny shapes; for each
+    run, render the full phylogeny (including extinct lineages) via `iplotx`,
+    uniformly downsampled to ≤10 000 tips with `phyloframe`. Tips and the
+    absolute stackplot share a per-strain `husl` palette; the space-filling
+    stackplot to the right groups strains by Hamming weight so bit-weight
+    composition reads bottom-to-top.
     """
     )
     return
 
 
 @app.cell
-def run_phylogeny_simulation(simulate):
-    # Baseline ABM/ODE-sync params from the sync notebook, scaled up for an
-    # exact-phylogeny demo at 200k pop x 600 steps.
-    PHYLO_POP_SIZE = 200_000
-    PHYLO_N_STEPS = 1_200
-    PHYLO_N_SITES = 10
-    PHYLO_MUTATION_RATE = 5e-5
-
-    phylo_df, phylogeny_df = simulate(
-        MUTATION_RATE=PHYLO_MUTATION_RATE,
-        N_SITES=PHYLO_N_SITES,
-        N_STEPS=PHYLO_N_STEPS,
-        POP_SIZE=PHYLO_POP_SIZE,
-        CONTACT_RATE=0.35,
-        RECOVERY_RATE=0.1,
-        WANING_RATE=0.02,
-        IMMUNE_STRENGTH=0.7,
-        SEED_COUNT=2,
-        IMMUNITY_FLOOR=0.05,
-        IMMUNITY_CEILING=1.0,
-        seed=2,
-        track_phylogeny=True,
-    )
-    return PHYLO_N_SITES, phylo_df, phylogeny_df
-
-
-@app.cell
-def peek_phylogeny(phylogeny_df):
-    print(f"phylogeny: {len(phylogeny_df)} total nodes")
-    print(f"phylogeny: {phylogeny_df['extant'].sum()} extant tips")
-    phylogeny_df.head()
-    return
-
-
-@app.cell(hide_code=True)
-def delimit_phylogeny_plot(mo):
-    mo.md(
-        """
-    ### Plot Phylogeny with iplotx
-
-    Render the full phylogeny (including extinct lineages) via `iplotx`,
-    uniformly downsampled to ≤500 tips with `phyloframe`. Tips are colored by
-    founder strain; the adjacent stackplot shows population composition over
-    time with strains stacked in order of increasing Hamming weight so
-    bit-weight composition reads bottom-to-top.
-    """
-    )
-    return
-
-
-@app.cell
-def plot_phylogeny(
-    PHYLO_N_SITES,
+def def_make_phylogeny_plot(
+    FuncFormatter,
+    ipx,
+    mcolors,
     np,
     pathlib,
-    phylo_df,
-    phylogeny_df,
+    pfl,
+    plt,
     sns,
     tp,
 ):
-    # workaround: iplotx 1.7.x uses importlib.metadata without importing it
-    import importlib.metadata  # noqa: F401
-
-    import iplotx as ipx
-    import matplotlib.colors as mcolors
-    import matplotlib.pyplot as pyplot_phylo
-    from phyloframe import legacy as pfl
-
-    # Keep extinct lineages — uniform tip downsampling (and a unifurcation
-    # collapse) is enough to keep the rendered tree legible. Synthetic global
-    # root collapses multi-seed origins to a single root (iplotx requirement).
-    # Ladderize last so the rendering reflects the final topology.
-    MAX_TIPS = 10_000
-    pruned_df = (
-        pfl.alifestd_downsample_tips_uniform_asexual(
-            phylogeny_df,
-            n_downsample=MAX_TIPS,
-            seed=0,
-        )
-        .pipe(pfl.alifestd_add_global_root)
-        .pipe(pfl.alifestd_collapse_unifurcations)
-        .pipe(pfl.alifestd_try_add_ancestor_list_col)
-        # Ladderize as the final structural step, then re-assign contiguous
-        # ids so id == row index (iplotx requirement).
-        .pipe(pfl.alifestd_ladderize_asexual)
-        .pipe(pfl.alifestd_assign_contiguous_ids)
-    )
-
-    assert pfl.alifestd_validate(pruned_df)
-    print(f"phylogeny: {len(phylogeny_df)} total nodes")
-    print(f"downsampled tree: {len(pruned_df)} nodes")
-    print(f"leaf count: {pfl.alifestd_count_leaf_nodes(pruned_df)}")
-
-    fmt = f"0{PHYLO_N_SITES}b"
-    pruned_df = pruned_df.assign(
-        strain=pruned_df["genome"].map(
-            lambda g: None if np.isnan(g) else format(int(g), fmt)[::-1],
-        ),
-    )
-
-    # All possible bit strings of length N_SITES, sorted by Hamming weight
-    # then lexicographically.
-    all_strains = sorted(
-        (format(g, fmt)[::-1] for g in range(2**PHYLO_N_SITES)),
-        key=lambda s: (s.count("1"), s),
-    )
-    hw_values = list(range(PHYLO_N_SITES + 1))
-    hw_palette = sns.color_palette("rocket_r", len(hw_values))
-
-    # Tip dots: per-strain palette so siblings sharing a strain land on the
-    # same color even when the tree spans many distinct genomes. `husl` gives
-    # 2**N_SITES maximally-distinct hues.
-    strain_palette = dict(
-        zip(all_strains, sns.color_palette("husl", len(all_strains))),
-    )
-
-    # iplotx accepts vertex_color as a positional list aligned to rows of the
-    # phyloframe shim; pass hex strings to keep matplotlib happy. The synthetic
-    # global root has no strain → render it as neutral gray.
-    vertex_colors = [
-        "#cccccc" if s is None else mcolors.to_hex(strain_palette[s])
-        for s in pruned_df["strain"]
-    ]
-
-    # Per-strain prevalence series for the absolute stackplot. Each band keeps
-    # its strain hue from the husl palette; ordering by HW then lex still
-    # clusters strains with the same Hamming weight together visually.
-    strain_cols = [
-        f"Strain_{s}" for s in all_strains if f"Strain_{s}" in phylo_df.columns
-    ]
-    stack_strains = [c[len("Strain_") :] for c in strain_cols]
-    steps = phylo_df["Step"].to_numpy()
-    y_steps = -steps
-    strain_layers = np.stack(
-        [phylo_df[c].to_numpy() for c in strain_cols], axis=0
-    )
-    strain_colors = [strain_palette[s] for s in stack_strains]
-
-    # Per-Hamming-weight aggregation, normalized so each row sums to 1
-    # (space-filling stackplot).
-    hw_layers = np.stack(
-        [
-            np.sum(
-                [
-                    phylo_df[f"Strain_{s}"].to_numpy()
-                    for s in stack_strains
-                    if s.count("1") == w
-                ]
-                or [np.zeros_like(steps, dtype=float)],
-                axis=0,
+    def make_phylogeny_plot(
+        N_SITES: int,
+        phylo_df,
+        phylogeny_df,
+        max_tips: int = 10_000,
+    ) -> None:
+        # Keep extinct lineages — uniform tip downsampling + unifurcation
+        # collapse is enough to keep the rendered tree legible. Synthetic
+        # global root collapses multi-seed origins to a single root (iplotx
+        # requirement). Ladderize last so the render reflects the final
+        # topology, then reassign contiguous ids (iplotx wants id == row).
+        pruned_df = (
+            pfl.alifestd_downsample_tips_uniform_asexual(
+                phylogeny_df,
+                n_downsample=max_tips,
+                seed=0,
             )
-            for w in hw_values
-        ],
-        axis=0,
-    )
-    hw_totals = hw_layers.sum(axis=0)
-    hw_layers_norm = np.where(hw_totals > 0, hw_layers / hw_totals, 0.0)
+            .pipe(pfl.alifestd_add_global_root)
+            .pipe(pfl.alifestd_collapse_unifurcations)
+            .pipe(pfl.alifestd_try_add_ancestor_list_col)
+            .pipe(pfl.alifestd_ladderize_asexual)
+            .pipe(pfl.alifestd_assign_contiguous_ids)
+        )
+        assert pfl.alifestd_validate(pruned_df)
+        print(f"  downsampled tree: {len(pruned_df)} nodes")
+        print(f"  leaf count: {pfl.alifestd_count_leaf_nodes(pruned_df)}")
 
-    def _fill_horiz(ax, layers, colors):
-        """Stackplot variant with time on the y-axis."""
-        prev = np.zeros_like(layers[0])
-        for layer, color in zip(layers, colors):
-            cur = prev + layer
-            ax.fill_betweenx(y_steps, prev, cur, color=color, edgecolor="none")
-            prev = cur
-
-    from matplotlib.ticker import FuncFormatter
-
-    with tp.teed(
-        pyplot_phylo.subplots,
-        nrows=1,
-        ncols=3,
-        figsize=(10, 7),
-        gridspec_kw={
-            "width_ratios": [1.4, 1.0, 1.0],
-            "wspace": 0.05,
-        },
-        sharey=True,
-        teeplot_outattrs={
-            "what": "phylogeny",
-            "n_sites": PHYLO_N_SITES,
-        },
-        teeplot_show=True,
-        teeplot_subdir=pathlib.Path(__file__).stem,
-    ) as (fig, axes):
-        ax_tree, ax_strain, ax_hw = axes
-
-        ipx.tree(
-            pfl.alifestd_to_iplotx_pandas(pruned_df),
-            ax=ax_tree,
-            layout="vertical",
-            vertex_color=vertex_colors,
-            vertex_size=5,
-            vertex_zorder=3,
-            edge_color="gray",
-            edge_linewidth=0.7,
-            edge_zorder=1,
-            margins=0.05,
-            strip_axes=False,
+        fmt = f"0{N_SITES}b"
+        pruned_df = pruned_df.assign(
+            strain=pruned_df["genome"].map(
+                lambda g: None if np.isnan(g) else format(int(g), fmt)[::-1],
+            ),
         )
 
-        _fill_horiz(ax_strain, strain_layers, strain_colors)
-        ax_strain.set_xlim(0, strain_layers.sum(axis=0).max() * 1.02)
-
-        _fill_horiz(ax_hw, hw_layers_norm, hw_palette)
-        ax_hw.set_xlim(0, 1)
-
-        # Time axis lives on the leftmost panel; show positive step numbers
-        # even though the underlying coordinate is negated to align with the
-        # iplotx layout.
-        ax_tree.set_ylabel("step")
-        ax_tree.yaxis.set_major_formatter(
-            FuncFormatter(lambda v, _pos: f"{abs(int(round(-v)))}"),
+        all_strains = sorted(
+            (format(g, fmt)[::-1] for g in range(2**N_SITES)),
+            key=lambda s: (s.count("1"), s),
         )
-        ax_tree.tick_params(left=True, labelleft=True)
-        for ax in (ax_strain, ax_hw):
-            ax.tick_params(labelleft=False, left=False)
+        hw_values = list(range(N_SITES + 1))
+        hw_palette = sns.color_palette("rocket_r", len(hw_values))
 
-        sns.despine(ax=ax_tree, top=True, right=True, bottom=True)
-        ax_tree.tick_params(bottom=False, labelbottom=False)
-        sns.despine(ax=ax_strain, left=True)
-        sns.despine(ax=ax_hw, left=True)
-
-        # Hamming-weight legend (sequential palette: darker = more "1"
-        # alleles). Per-strain entries would explode at 2**N_SITES; instead
-        # all panels share the HW key.
-        hw_handles = [
-            pyplot_phylo.Line2D(
-                [0],
-                [0],
-                marker="s",
-                color="w",
-                markerfacecolor=hw_palette[i],
-                markersize=8,
-                label=f"HW {w}",
-            )
-            for i, w in enumerate(hw_values)
+        # Tip dots and strain stackplot bands share this husl palette so
+        # tip color matches the band color of its strain at any timestep.
+        strain_palette = dict(
+            zip(all_strains, sns.color_palette("husl", len(all_strains))),
+        )
+        vertex_colors = [
+            "#cccccc" if s is None else mcolors.to_hex(strain_palette[s])
+            for s in pruned_df["strain"]
         ]
-        ax_hw.legend(
-            handles=hw_handles,
-            loc="center left",
-            bbox_to_anchor=(1.02, 0.5),
-            frameon=False,
+
+        strain_cols = [
+            f"Strain_{s}"
+            for s in all_strains
+            if f"Strain_{s}" in phylo_df.columns
+        ]
+        stack_strains = [c[len("Strain_") :] for c in strain_cols]
+        steps = phylo_df["Step"].to_numpy()
+        y_steps = -steps
+        strain_layers = np.stack(
+            [phylo_df[c].to_numpy() for c in strain_cols], axis=0
         )
-        fig.tight_layout()
+        strain_colors = [strain_palette[s] for s in stack_strains]
+
+        hw_layers = np.stack(
+            [
+                np.sum(
+                    [
+                        phylo_df[f"Strain_{s}"].to_numpy()
+                        for s in stack_strains
+                        if s.count("1") == w
+                    ]
+                    or [np.zeros_like(steps, dtype=float)],
+                    axis=0,
+                )
+                for w in hw_values
+            ],
+            axis=0,
+        )
+        hw_totals = hw_layers.sum(axis=0)
+        hw_layers_norm = np.where(hw_totals > 0, hw_layers / hw_totals, 0.0)
+
+        def _fill_horiz(ax, layers, colors):
+            prev = np.zeros_like(layers[0])
+            for layer, color in zip(layers, colors):
+                cur = prev + layer
+                ax.fill_betweenx(
+                    y_steps, prev, cur, color=color, edgecolor="none"
+                )
+                prev = cur
+
+        with tp.teed(
+            plt.subplots,
+            nrows=1,
+            ncols=3,
+            figsize=(12, 7),
+            gridspec_kw={
+                "width_ratios": [1.4, 1.0, 1.0],
+                "wspace": 0.05,
+            },
+            sharey=True,
+            teeplot_outattrs={
+                "what": "phylogeny",
+                "n_sites": N_SITES,
+            },
+            teeplot_show=True,
+            teeplot_subdir=pathlib.Path(__file__).stem,
+        ) as (fig, axes):
+            ax_tree, ax_strain, ax_hw = axes
+
+            ipx.tree(
+                pfl.alifestd_to_iplotx_pandas(pruned_df),
+                ax=ax_tree,
+                layout="vertical",
+                vertex_color=vertex_colors,
+                vertex_size=5,
+                vertex_zorder=3,
+                edge_color="gray",
+                edge_linewidth=0.7,
+                edge_zorder=1,
+                margins=0.05,
+                strip_axes=False,
+            )
+
+            _fill_horiz(ax_strain, strain_layers, strain_colors)
+            ax_strain.set_xlim(0, strain_layers.sum(axis=0).max() * 1.02)
+
+            _fill_horiz(ax_hw, hw_layers_norm, hw_palette)
+            ax_hw.set_xlim(0, 1)
+
+            # Time axis lives on the leftmost panel; show positive step
+            # numbers even though the underlying coordinate is negated to
+            # align with the iplotx layout.
+            ax_tree.set_ylabel("step")
+            ax_tree.yaxis.set_major_formatter(
+                FuncFormatter(lambda v, _pos: f"{abs(int(round(-v)))}"),
+            )
+            ax_tree.tick_params(left=True, labelleft=True)
+            for ax in (ax_strain, ax_hw):
+                ax.tick_params(labelleft=False, left=False)
+
+            sns.despine(ax=ax_tree, top=True, right=True, bottom=True)
+            ax_tree.tick_params(bottom=False, labelbottom=False)
+            sns.despine(ax=ax_strain, left=True)
+            sns.despine(ax=ax_hw, left=True)
+
+            # Top-5 initial vs overall strains by integrated prevalence; the
+            # "initial" window is the first 10% of timesteps where the
+            # seeded wildtype + earliest mutants dominate.
+            n_initial = max(1, len(steps) // 10)
+            init_totals = strain_layers[:, :n_initial].sum(axis=1)
+            overall_totals = strain_layers.sum(axis=1)
+            top_initial = [
+                stack_strains[i] for i in np.argsort(init_totals)[::-1][:5]
+            ]
+            top_overall = [
+                stack_strains[i] for i in np.argsort(overall_totals)[::-1][:5]
+            ]
+
+            def _strain_handle(s):
+                return plt.Line2D(
+                    [0],
+                    [0],
+                    marker="o",
+                    color="w",
+                    markerfacecolor=mcolors.to_hex(strain_palette[s]),
+                    markersize=8,
+                    label=f"strain {s} (HW {s.count('1')})",
+                )
+
+            leg_init = ax_hw.legend(
+                handles=[_strain_handle(s) for s in top_initial],
+                title=f"top 5 initial strains (steps 0–{n_initial})",
+                loc="upper left",
+                bbox_to_anchor=(1.02, 1.0),
+                frameon=False,
+            )
+            ax_hw.add_artist(leg_init)
+
+            leg_ovr = ax_hw.legend(
+                handles=[_strain_handle(s) for s in top_overall],
+                title="top 5 overall strains",
+                loc="center left",
+                bbox_to_anchor=(1.02, 0.55),
+                frameon=False,
+            )
+            ax_hw.add_artist(leg_ovr)
+
+            # Hamming-weight legend for the space-filling panel
+            # (sequential rocket_r palette: darker = more "1" alleles).
+            hw_handles = [
+                plt.Line2D(
+                    [0],
+                    [0],
+                    marker="s",
+                    color="w",
+                    markerfacecolor=hw_palette[i],
+                    markersize=8,
+                    label=f"HW {w}",
+                )
+                for i, w in enumerate(hw_values)
+            ]
+            ax_hw.legend(
+                handles=hw_handles,
+                title="Hamming weight",
+                loc="lower left",
+                bbox_to_anchor=(1.02, 0.0),
+                frameon=False,
+            )
+            fig.tight_layout()
+
+    return (make_phylogeny_plot,)
+
+
+@app.cell
+def run_phylogeny_sweep(make_phylogeny_plot, simulate):
+    # Baseline ABM/ODE-sync params; sweep N_SITES across a few genome sizes
+    # to compare the resulting phylogenies. POP_SIZE / N_STEPS pulled in
+    # from the sync notebook's regime; WANING_RATE bumped to 0.02 because
+    # at the original 0.005 immunity saturates and larger genome runs go
+    # extinct before the dynamics settle.
+    PHYLO_POP_SIZE = 200_000
+    PHYLO_N_STEPS = 1_200
+    PHYLO_MUTATION_RATE = 5e-5
+
+    for PHYLO_N_SITES in (2, 4, 8, 16):
+        print(f"=== N_SITES={PHYLO_N_SITES} ===")
+        phylo_df, phylogeny_df = simulate(
+            MUTATION_RATE=PHYLO_MUTATION_RATE,
+            N_SITES=PHYLO_N_SITES,
+            N_STEPS=PHYLO_N_STEPS,
+            POP_SIZE=PHYLO_POP_SIZE,
+            CONTACT_RATE=0.35,
+            RECOVERY_RATE=0.1,
+            WANING_RATE=0.02,
+            IMMUNE_STRENGTH=0.7,
+            SEED_COUNT=2,
+            IMMUNITY_FLOOR=0.05,
+            IMMUNITY_CEILING=1.0,
+            seed=2,
+            track_phylogeny=True,
+        )
+        print(f"  phylogeny: {len(phylogeny_df)} total nodes")
+        print(f"  extant tips: {phylogeny_df['extant'].sum()}")
+        make_phylogeny_plot(PHYLO_N_SITES, phylo_df, phylogeny_df)
+        # Free large per-iteration buffers before the next run.
+        del phylo_df, phylogeny_df
     return
 
 
