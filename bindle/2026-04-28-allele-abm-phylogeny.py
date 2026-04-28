@@ -36,6 +36,8 @@ def import_pkg():
     from tqdm.auto import tqdm
     from watermark import watermark
 
+    from pylib import rescale_stacked_kdeplot
+
     return (
         FuncFormatter,
         cp,
@@ -46,6 +48,7 @@ def import_pkg():
         pd,
         pfl,
         plt,
+        rescale_stacked_kdeplot,
         sns,
         tp,
         tqdm,
@@ -513,6 +516,7 @@ def def_make_phylogeny_plot(
     pd,
     pfl,
     plt,
+    rescale_stacked_kdeplot,
     sns,
     tp,
 ):
@@ -716,6 +720,10 @@ def def_make_phylogeny_plot(
                 legend=False,
                 bw_adjust=0.5,
             )
+            # Re-render the strain stack on a log-scaled density axis so
+            # rare strains stay visible alongside dominant ones; each
+            # band keeps its linear share of the column height.
+            rescale_stacked_kdeplot(ax_strain, orient="y", scale="log")
 
             _hw_str = [f"HW {w}" for w in hw_values]
             _hw_long = pd.DataFrame(
@@ -831,7 +839,7 @@ def def_make_phylogeny_plot(
                     handles=handles,
                     title=title,
                     loc="center",
-                    ncol=len(handles),
+                    ncol=3,
                     frameon=False,
                     handletextpad=0.4,
                     columnspacing=1.0,
