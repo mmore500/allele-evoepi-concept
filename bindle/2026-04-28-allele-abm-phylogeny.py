@@ -606,7 +606,10 @@ def def_make_phylogeny_plot(
             plt.subplots,
             nrows=1,
             ncols=3,
-            figsize=(12, 7),
+            # Grow vertically with N_SITES so the HW legend (N_SITES+1
+            # entries) plus the two top-strain legends still fit on the
+            # right margin without overlap.
+            figsize=(12, max(7, 4.5 + 0.4 * N_SITES)),
             gridspec_kw={
                 "width_ratios": [1.4, 1.0, 1.0],
                 "wspace": 0.05,
