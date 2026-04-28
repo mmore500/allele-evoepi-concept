@@ -562,7 +562,7 @@ def def_make_phylogeny_plot(
         # Tip dots and strain stackplot bands share this husl palette so
         # tip color matches the band color of its strain at any timestep.
         strain_palette = dict(
-            zip(all_strains, sns.color_palette("rainbow", len(all_strains))),
+            zip(all_strains, sns.color_palette("husl", len(all_strains))),
         )
         vertex_colors = [
             "#cccccc" if s is None else mcolors.to_hex(strain_palette[s])
@@ -605,10 +605,10 @@ def def_make_phylogeny_plot(
             .map(lambda g: format(int(g), fmt)[::-1])
             .value_counts()
         )
-        top_final = extant_strain_counts.head(6).index.tolist()
+        top_final = extant_strain_counts.head(5).index.tolist()
         overall_totals = strain_layers.sum(axis=1)
         top_overall = [
-            stack_strains[i] for i in np.argsort(overall_totals)[::-1][:6]
+            stack_strains[i] for i in np.argsort(overall_totals)[::-1][:5]
         ]
 
         # Cross-sample the HW legend so it never has more than 4 entries:
@@ -817,12 +817,12 @@ def def_make_phylogeny_plot(
                 (
                     ax_leg_overall,
                     [_strain_handle(s) for s in top_overall],
-                    "top 6 overall",
+                    "top 5 overall",
                 ),
                 (
                     ax_leg_final,
                     [_strain_handle(s) for s in top_final],
-                    f"top 6 final (extant @ step {final_hi})",
+                    f"top 5 final (extant @ step {final_hi})",
                 ),
                 (
                     ax_leg_hw,
