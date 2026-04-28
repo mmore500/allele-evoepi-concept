@@ -516,6 +516,7 @@ def def_make_phylogeny_plot(
         phylo_df,
         phylogeny_df,
         max_tips: int = 10_000,
+        height_scale: float = 1.0,
     ) -> None:
         # Keep extinct lineages — uniform tip downsampling + unifurcation
         # collapse is enough to keep the rendered tree legible. Synthetic
@@ -608,8 +609,9 @@ def def_make_phylogeny_plot(
             ncols=3,
             # Grow vertically with N_SITES so the HW legend (N_SITES+1
             # entries) plus the two top-strain legends still fit on the
-            # right margin without overlap.
-            figsize=(12, max(7, 4.5 + 0.4 * N_SITES)),
+            # right margin without overlap; height_scale stretches the
+            # tree+stackplots when running over a longer time window.
+            figsize=(12, height_scale * max(7, 4.5 + 0.4 * N_SITES)),
             gridspec_kw={
                 "width_ratios": [1.4, 1.0, 1.0],
                 "wspace": 0.05,
@@ -618,6 +620,7 @@ def def_make_phylogeny_plot(
             teeplot_outattrs={
                 "what": "phylogeny",
                 "n_sites": N_SITES,
+                "n_steps": int(phylo_df["Step"].max()) + 1,
             },
             teeplot_show=True,
             teeplot_subdir=pathlib.Path(__file__).stem,
@@ -660,14 +663,14 @@ def def_make_phylogeny_plot(
             sns.despine(ax=ax_strain, left=True)
             sns.despine(ax=ax_hw, left=True)
 
-            # Top-5 initial vs overall strains by integrated prevalence; the
-            # "initial" window is the first 10% of timesteps where the
-            # seeded wildtype + earliest mutants dominate.
-            n_initial = max(1, len(steps) // 10)
-            init_totals = strain_layers[:, :n_initial].sum(axis=1)
+            # Top-5 final vs overall strains by integrated prevalence; the
+            # "final" window is the last 10% of timesteps so it captures
+            # whichever lineages currently dominate the population.
+            n_final = max(1, len(steps) // 10)
+            final_totals = strain_layers[:, -n_final:].sum(axis=1)
             overall_totals = strain_layers.sum(axis=1)
-            top_initial = [
-                stack_strains[i] for i in np.argsort(init_totals)[::-1][:5]
+            top_final = [
+                stack_strains[i] for i in np.argsort(final_totals)[::-1][:5]
             ]
             top_overall = [
                 stack_strains[i] for i in np.argsort(overall_totals)[::-1][:5]
@@ -684,14 +687,16 @@ def def_make_phylogeny_plot(
                     label=f"strain {s} (HW {s.count('1')})",
                 )
 
-            leg_init = ax_hw.legend(
-                handles=[_strain_handle(s) for s in top_initial],
-                title=f"top 5 initial strains (steps 0–{n_initial})",
+            final_lo = int(steps[-n_final])
+            final_hi = int(steps[-1])
+            leg_final = ax_hw.legend(
+                handles=[_strain_handle(s) for s in top_final],
+                title=f"top 5 final strains (steps {final_lo}–{final_hi})",
                 loc="upper left",
                 bbox_to_anchor=(1.02, 1.0),
                 frameon=False,
             )
-            ax_hw.add_artist(leg_init)
+            ax_hw.add_artist(leg_final)
 
             leg_ovr = ax_hw.legend(
                 handles=[_strain_handle(s) for s in top_overall],
@@ -739,9 +744,11 @@ def run_phylogeny_sweep(make_phylogeny_plot, simulate):
     PHYLO_N_STEPS = 1_200
     PHYLO_MUTATION_RATE = 5e-5
 
+    # Underscored locals so marimo treats these as cell-private (the long
+    # run cell also needs to bind phylo_df / phylogeny_df).
     for PHYLO_N_SITES in (2, 4, 8, 16):
         print(f"=== N_SITES={PHYLO_N_SITES} ===")
-        phylo_df, phylogeny_df = simulate(
+        _phylo_df, _phylogeny_df = simulate(
             MUTATION_RATE=PHYLO_MUTATION_RATE,
             N_SITES=PHYLO_N_SITES,
             N_STEPS=PHYLO_N_STEPS,
@@ -756,11 +763,61 @@ def run_phylogeny_sweep(make_phylogeny_plot, simulate):
             seed=2,
             track_phylogeny=True,
         )
-        print(f"  phylogeny: {len(phylogeny_df)} total nodes")
-        print(f"  extant tips: {phylogeny_df['extant'].sum()}")
-        make_phylogeny_plot(PHYLO_N_SITES, phylo_df, phylogeny_df)
+        print(f"  phylogeny: {len(_phylogeny_df)} total nodes")
+        print(f"  extant tips: {_phylogeny_df['extant'].sum()}")
+        make_phylogeny_plot(PHYLO_N_SITES, _phylo_df, _phylogeny_df)
         # Free large per-iteration buffers before the next run.
-        del phylo_df, phylogeny_df
+        del _phylo_df, _phylogeny_df
+    return
+
+
+@app.cell(hide_code=True)
+def delimit_long_run(mo):
+    mo.md("""
+    ### Extended N_SITES = 16 Run
+
+    Same baseline params as the sweep but stretched 10× along the time
+    axis (12 000 steps, figure 10× as tall) so the long-horizon strain
+    turnover and Hamming-weight drift are legible.
+    """)
+    return
+
+
+@app.cell
+def run_phylogeny_long(make_phylogeny_plot, simulate):
+    LONG_N_SITES = 16
+    LONG_N_STEPS = 12_000
+    # Down-scale population so the 12 000-step phylogeny tracker fits in
+    # CI memory (16 GB); the qualitative drift / turnover dynamics at this
+    # mutation rate look the same at lower N.
+    LONG_POP_SIZE = 20_000
+    LONG_MUTATION_RATE = 5e-5
+
+    print(f"=== long run: N_SITES={LONG_N_SITES}, N_STEPS={LONG_N_STEPS} ===")
+    _phylo_df, _phylogeny_df = simulate(
+        MUTATION_RATE=LONG_MUTATION_RATE,
+        N_SITES=LONG_N_SITES,
+        N_STEPS=LONG_N_STEPS,
+        POP_SIZE=LONG_POP_SIZE,
+        CONTACT_RATE=0.35,
+        RECOVERY_RATE=0.1,
+        WANING_RATE=0.02,
+        IMMUNE_STRENGTH=0.7,
+        SEED_COUNT=2,
+        IMMUNITY_FLOOR=0.05,
+        IMMUNITY_CEILING=1.0,
+        seed=2,
+        track_phylogeny=True,
+    )
+    print(f"  phylogeny: {len(_phylogeny_df)} total nodes")
+    print(f"  extant tips: {_phylogeny_df['extant'].sum()}")
+    make_phylogeny_plot(
+        LONG_N_SITES,
+        _phylo_df,
+        _phylogeny_df,
+        height_scale=10.0,
+    )
+    del _phylo_df, _phylogeny_df
     return
 
 
