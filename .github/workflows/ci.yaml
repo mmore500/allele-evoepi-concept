@@ -28,6 +28,11 @@ jobs:
           sudo python -m pip install pip --upgrade
           sudo python -m pip install uv --upgrade
           sudo python -m uv pip install -r requirements.txt  --system
+          # Pin black version on PATH so tidy/test_black.sh doesn't pick up
+          # whatever the runner image happens to have preinstalled; the
+          # source tree is formatted against this version.
+          sudo python -m pip install --force-reinstall black==22.10.0
+          which black && black --version
       - run: ./tidy/test_tidy.sh
 
   lint:
