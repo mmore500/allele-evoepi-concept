@@ -6,12 +6,11 @@ app = marimo.App(width="full")
 
 @app.cell
 def import_std():
-    import itertools as it
     import pathlib
     import random
     from typing import Dict, List, Sequence, Tuple, Union
 
-    return Dict, List, Sequence, Tuple, Union, it, pathlib, random
+    return Dict, List, Sequence, Tuple, Union, pathlib, random
 
 
 @app.cell
@@ -21,7 +20,6 @@ def import_pkg():
     except ImportError:
         import numpy as cp
 
-    from IPython.display import display_html
     import marimo as mo
     import numpy as np
     import pandas as pd
@@ -30,7 +28,7 @@ def import_pkg():
     from tqdm.auto import tqdm
     from watermark import watermark
 
-    return cp, display_html, mo, np, pd, sns, tp, tqdm, watermark
+    return cp, mo, np, pd, sns, tp, tqdm, watermark
 
 
 @app.cell(hide_code=True)
@@ -90,7 +88,8 @@ def def_simulate(Dict, List, Sequence, Tuple, Union, np, pd, random, tqdm, xp):
         MUTATION_THRESHOLD: float = 0.0,
         IMMUNITY_CEILING: float = 1.0,
         IMMUNITY_FLOOR: float = 0.0,
-    ) -> pd.DataFrame:
+        track_phylogeny: bool = False,
+    ) -> Union[pd.DataFrame, Tuple[pd.DataFrame, pd.DataFrame]]:
         random.seed(seed)
         np.random.seed(seed)
         xp.random.seed(seed)
@@ -102,7 +101,18 @@ def def_simulate(Dict, List, Sequence, Tuple, Union, np, pd, random, tqdm, xp):
                 "current data types support only up to 8 sites",
             )
 
-        def initialize_pop() -> Tuple[xp.ndarray, xp.ndarray, xp.ndarray]:
+        # Phylogeny tracking state. Each entry corresponds to one infection
+        # event (initial seed or onward transmission); ancestor_id of a root
+        # references itself, per the alife data standard.
+        phylo_ids: List[int] = []
+        phylo_ancestor_ids: List[int] = []
+        phylo_origin_times: List[int] = []
+        phylo_genomes: List[int] = []
+        next_node_id = [0]
+
+        def initialize_pop() -> (
+            Tuple[xp.ndarray, xp.ndarray, xp.ndarray, xp.ndarray]
+        ):
             """Initialize population statuses, genomes, and immune history."""
             pathogen_genomes = xp.zeros(shape=POP_SIZE, dtype=xp.uint8)
             # host_immunities: Tracks each of the 2*N_SITES alleles
@@ -115,20 +125,40 @@ def def_simulate(Dict, List, Sequence, Tuple, Union, np, pd, random, tqdm, xp):
             host_statuses = xp.full(
                 shape=POP_SIZE, fill_value=0, dtype=xp.uint8
             )
+            # pathogen_node_ids: phylogeny node id of each host's pathogen
+            # (only populated when track_phylogeny=True; -1 means uninfected)
+            pathogen_node_ids = xp.full(
+                shape=POP_SIZE, fill_value=-1, dtype=xp.int64
+            )
 
-            return host_statuses, pathogen_genomes, host_immunities
+            return (
+                host_statuses,
+                pathogen_genomes,
+                host_immunities,
+                pathogen_node_ids,
+            )
 
         def infect_initial(
             host_statuses: xp.ndarray,
             pathogen_genomes: xp.ndarray,
-        ) -> Tuple[xp.ndarray, xp.ndarray]:
+            pathogen_node_ids: xp.ndarray,
+        ) -> Tuple[xp.ndarray, xp.ndarray, xp.ndarray]:
             """Seed the initial infection wave with the starting strain."""
             seeded_indices = xp.random.choice(
                 POP_SIZE, size=SEED_COUNT, replace=False
             )
             host_statuses[seeded_indices] = 1
             pathogen_genomes[seeded_indices] = 0  # wildtype
-            return host_statuses, pathogen_genomes
+            if track_phylogeny:
+                for idx in seeded_indices.tolist():
+                    nid = next_node_id[0]
+                    phylo_ids.append(nid)
+                    phylo_ancestor_ids.append(nid)  # root self-reference
+                    phylo_origin_times.append(0)
+                    phylo_genomes.append(0)
+                    pathogen_node_ids[idx] = nid
+                    next_node_id[0] += 1
+            return host_statuses, pathogen_genomes, pathogen_node_ids
 
         def calc_infection_probabilities(
             host_immunities: xp.ndarray,
@@ -246,7 +276,9 @@ def def_simulate(Dict, List, Sequence, Tuple, Union, np, pd, random, tqdm, xp):
             host_statuses: xp.ndarray,
             pathogen_genomes: xp.ndarray,
             host_immunities: xp.ndarray,
-        ) -> Tuple[xp.ndarray, xp.ndarray]:
+            pathogen_node_ids: xp.ndarray,
+            step: int,
+        ) -> Tuple[xp.ndarray, xp.ndarray, xp.ndarray]:
             """Vectorized transmission based on allele-specific susceptibility."""
             contacts = xp.random.randint(
                 low=0, high=POP_SIZE, size=POP_SIZE, dtype=xp.uint32
@@ -266,7 +298,24 @@ def def_simulate(Dict, List, Sequence, Tuple, Union, np, pd, random, tqdm, xp):
                 new_infections
             ]
 
-            return host_statuses, pathogen_genomes
+            if track_phylogeny:
+                new_idx = xp.where(new_infections)[0].tolist()
+                src_node_ids = pathogen_node_ids[
+                    contacts[new_infections]
+                ].tolist()
+                src_genomes = pathogen_genomes[new_infections].tolist()
+                for idx, anc_id, gnm in zip(
+                    new_idx, src_node_ids, src_genomes
+                ):
+                    nid = next_node_id[0]
+                    phylo_ids.append(nid)
+                    phylo_ancestor_ids.append(int(anc_id))
+                    phylo_origin_times.append(int(step))
+                    phylo_genomes.append(int(gnm))
+                    pathogen_node_ids[idx] = nid
+                    next_node_id[0] += 1
+
+            return host_statuses, pathogen_genomes, pathogen_node_ids
 
         def apply_mutations(
             pathogen_genomes: xp.ndarray,
@@ -300,10 +349,20 @@ def def_simulate(Dict, List, Sequence, Tuple, Union, np, pd, random, tqdm, xp):
             host_statuses: xp.ndarray,
             pathogen_genomes: xp.ndarray,
             host_immunities: xp.ndarray,
-        ) -> Tuple[xp.ndarray, xp.ndarray, xp.ndarray]:
+            pathogen_node_ids: xp.ndarray,
+            step: int,
+        ) -> Tuple[xp.ndarray, xp.ndarray, xp.ndarray, xp.ndarray]:
             """Run one step of the simulation."""
-            host_statuses, pathogen_genomes = transmit_infection(
-                host_statuses, pathogen_genomes, host_immunities
+            (
+                host_statuses,
+                pathogen_genomes,
+                pathogen_node_ids,
+            ) = transmit_infection(
+                host_statuses,
+                pathogen_genomes,
+                host_immunities,
+                pathogen_node_ids,
+                step,
             )
             pathogen_genomes = apply_mutations(pathogen_genomes, host_statuses)
             host_statuses, host_immunities = update_recoveries(
@@ -311,11 +370,21 @@ def def_simulate(Dict, List, Sequence, Tuple, Union, np, pd, random, tqdm, xp):
             )
             host_immunities = update_waning(host_immunities)
 
-            return host_statuses, pathogen_genomes, host_immunities
+            return (
+                host_statuses,
+                pathogen_genomes,
+                host_immunities,
+                pathogen_node_ids,
+            )
 
-        host_statuses, pathogen_genomes, host_immunities = initialize_pop()
-        host_statuses, pathogen_genomes = infect_initial(
-            host_statuses, pathogen_genomes
+        (
+            host_statuses,
+            pathogen_genomes,
+            host_immunities,
+            pathogen_node_ids,
+        ) = initialize_pop()
+        host_statuses, pathogen_genomes, pathogen_node_ids = infect_initial(
+            host_statuses, pathogen_genomes, pathogen_node_ids
         )
         data_log: List[Dict[str, float]] = []
 
@@ -324,8 +393,13 @@ def def_simulate(Dict, List, Sequence, Tuple, Union, np, pd, random, tqdm, xp):
                 host_statuses,
                 pathogen_genomes,
                 host_immunities,
+                pathogen_node_ids,
             ) = update_simulation(
-                host_statuses, pathogen_genomes, host_immunities
+                host_statuses,
+                pathogen_genomes,
+                host_immunities,
+                pathogen_node_ids,
+                t + 1,
             )
 
             inf_mask = host_statuses > 0
@@ -362,252 +436,228 @@ def def_simulate(Dict, List, Sequence, Tuple, Union, np, pd, random, tqdm, xp):
             log_entry.update(immunity_dict)
             data_log.append(log_entry)
 
-        return pd.DataFrame(data_log).fillna(0).copy()
+        df = pd.DataFrame(data_log).fillna(0).copy()
+        if not track_phylogeny:
+            return df
+
+        # Mark nodes whose lineage is still extant at end of simulation,
+        # i.e. at least one currently-infected host carries that node's id.
+        extant_node_ids = set(
+            int(nid) for nid in pathogen_node_ids[host_statuses > 0].tolist()
+        )
+        phylogeny_df = pd.DataFrame(
+            {
+                "id": phylo_ids,
+                "ancestor_id": phylo_ancestor_ids,
+                "origin_time": phylo_origin_times,
+                "genome": phylo_genomes,
+                "extant": [nid in extant_node_ids for nid in phylo_ids],
+            }
+        )
+        return df, phylogeny_df
 
     return (simulate,)
 
 
 @app.cell(hide_code=True)
-def delimit_plotting(mo):
+def delimit_phylogeny(mo):
     mo.md(
         """
-    ## Plotting Implementation
+    ## Exact Phylogeny Tracking
+
+    Run an example with `track_phylogeny=True` to record an alife-standard
+    phylogeny (`id` / `ancestor_id` / `origin_time`) of pathogen lineages,
+    including extinct lineages, then visualize with `iplotx`.
     """
     )
     return
 
 
 @app.cell
-def def_plotter(it, np, pathlib, pd, sns, tp):
-    def render_timeseries_plots(
-        df: pd.DataFrame,
-        suptitle: str,
-        teeplot_outattrs: dict,
-        POP_SIZE: int,
-    ) -> None:
-        for what, row in it.product(
-            ["Susc", "Strain"],
-            ["Seed", None],
-        ):
-            data = (
-                df.filter(regex=f"Step|Seed|{what}", axis=1)
-                .melt(
-                    id_vars=["Step", "Seed"],
-                    var_name="Class",
-                    value_name="Prevalence",
-                )
-                .astype(
-                    {
-                        "Step": int,
-                        "Class": str,
-                        "Prevalence": float,
-                    },
-                )
-            )
-            data["Ham. Wt."] = data["Class"].str.count("1|3|5|7|9")
-            palette = dict(
-                zip(
-                    data["Class"].unique(),
-                    sns.color_palette(
-                        "colorblind", len(data["Class"].unique())
-                    ),
-                )
-            )
-            with tp.teed(
-                sns.relplot,
-                data=data,
-                x="Step",
-                y="Prevalence",
-                hue="Class",
-                row=row,
-                alpha=0.8,
-                dashes=False,
-                errorbar=("pi", 100),
-                err_kws=dict(alpha=0.1),
-                estimator=np.median,
-                facet_kws=dict(margin_titles=True),
-                kind="line",
-                palette=palette,
-                teeplot_outattrs={
-                    **teeplot_outattrs,
-                    "what": what,
-                },
-                teeplot_subdir=pathlib.Path(__file__).stem,
-            ) as g:
-                for ax in g.axes.flat:
-                    ax.grid(True, alpha=0.3)
-                g.figure.set_size_inches(w=4, h=1.5)
-                sns.move_legend(
-                    g,
-                    "center left",
-                    bbox_to_anchor=(0.9, 0.5),
-                    frameon=False,
-                )
+def run_phylogeny_simulation(simulate):
+    PHYLO_POP_SIZE = 10_000
+    PHYLO_N_STEPS = 200
+    PHYLO_N_SITES = 3
+    PHYLO_MUTATION_RATE = 5e-3
 
-            with tp.teed(
-                sns.relplot,
-                data=data,
-                x="Step",
-                y="Prevalence",
-                hue="Class",
-                col="Ham. Wt.",
-                row=row,
-                alpha=0.8,
-                dashes=False,
-                errorbar=("pi", 100),
-                err_kws=dict(alpha=0.1),
-                estimator=np.median,
-                facet_kws=dict(margin_titles=True),
-                kind="line",
-                palette=palette,
-                teeplot_outattrs={
-                    **teeplot_outattrs,
-                    "what": what,
-                },
-                teeplot_subdir=pathlib.Path(__file__).stem,
-            ) as g:
-                g.map_dataframe(
-                    sns.lineplot,
-                    x="Step",
-                    y="Prevalence",
-                    hue="Class",
-                    style="Seed",
-                    alpha=0.7,
-                    dashes=False,
-                    errorbar=None,
-                    legend=False,
-                    linestyle=":",
-                    linewidth=0.6,
-                    palette=palette,
-                )
-                for ax in g.axes.flat:
-                    ax.grid(True, alpha=0.3)
-                if what == "Strain":
-                    g.set(yscale="log")
+    phylo_df, phylogeny_df = simulate(
+        MUTATION_RATE=PHYLO_MUTATION_RATE,
+        N_SITES=PHYLO_N_SITES,
+        N_STEPS=PHYLO_N_STEPS,
+        POP_SIZE=PHYLO_POP_SIZE,
+        CONTACT_RATE=0.35,
+        RECOVERY_RATE=0.1,
+        WANING_RATE=0.005,
+        IMMUNE_STRENGTH=0.7,
+        SEED_COUNT=2,
+        IMMUNITY_FLOOR=0.05,
+        IMMUNITY_CEILING=1.0,
+        seed=2,
+        track_phylogeny=True,
+    )
+    return PHYLO_N_SITES, phylo_df, phylogeny_df
 
-                g.set(ylim=(1 / POP_SIZE, 1.1))
-                g.figure.suptitle(suptitle)
-                if row is not None:
-                    g.figure.subplots_adjust(hspace=0.16, top=0.9)
-                    g.figure.set_size_inches(w=5, h=5)
-                else:
-                    g.figure.subplots_adjust(top=0.7)
-                    g.figure.set_size_inches(w=5, h=2)
 
-                sns.move_legend(
-                    g,
-                    "center left",
-                    bbox_to_anchor=(0.9, 0.5),
-                    frameon=False,
-                )
-
-    return (render_timeseries_plots,)
+@app.cell
+def peek_phylogeny(phylogeny_df):
+    print(f"phylogeny: {len(phylogeny_df)} total nodes")
+    print(f"phylogeny: {phylogeny_df['extant'].sum()} extant tips")
+    phylogeny_df.head()
+    return
 
 
 @app.cell(hide_code=True)
-def delimit_run(mo):
+def delimit_phylogeny_plot(mo):
     mo.md(
         """
-    ## Run Simulation and Render Plots across Condition Matrix
+    ### Plot Phylogeny with iplotx
+
+    Render the full phylogeny (including extinct lineages) via `iplotx`,
+    uniformly downsampled to ≤500 tips with `phyloframe`. Tips are colored by
+    founder strain; the adjacent stackplot shows population composition over
+    time with strains stacked in order of increasing Hamming weight so
+    bit-weight composition reads bottom-to-top.
     """
     )
     return
 
 
 @app.cell
-def run_simulation(
-    display_html,
-    it,
-    pd,
-    render_timeseries_plots,
-    simulate,
-    tqdm,
+def plot_phylogeny(
+    PHYLO_N_SITES,
+    np,
+    pathlib,
+    phylo_df,
+    phylogeny_df,
+    sns,
+    tp,
 ):
-    N_REP = 1
-    N_STEPS = 600
-    condition_matrix = it.product(
-        [5e-5],  # MUTATION_RATE
-        [250_000],  # POP_SIZE
-        [2],  # N_SITES
-    )
-    for MUTATION_RATE, POP_SIZE, N_SITES in tqdm([*condition_matrix]):
-        suptitle = (
-            f"Pop Size: {POP_SIZE / 1_000_000}M., "
-            f"Mutation Rate: {MUTATION_RATE}, "
-            f"Num Sites: {N_SITES}"
+    # workaround: iplotx 1.7.x uses importlib.metadata without importing it
+    import importlib.metadata  # noqa: F401
+
+    import iplotx as ipx
+    import matplotlib.colors as mcolors
+    import matplotlib.pyplot as pyplot_phylo
+    from phyloframe import legacy as pfl
+
+    # Keep extinct lineages — uniform tip downsampling (and a unifurcation
+    # collapse) is enough to keep the rendered tree legible (<10k tips).
+    # Add a synthetic global root so iplotx sees one root even when the sim
+    # had multiple seeds.
+    MAX_TIPS = 500
+    pruned_df = (
+        pfl.alifestd_downsample_tips_uniform_asexual(
+            phylogeny_df,
+            n_downsample=MAX_TIPS,
+            seed=0,
         )
-        display_html(f"<h2>{suptitle}</h2>", raw=True)
-        dfs = [
-            simulate(
-                MUTATION_RATE=MUTATION_RATE,
-                N_SITES=N_SITES,
-                N_STEPS=N_STEPS,
-                seed=rep + 2,
-                POP_SIZE=POP_SIZE,
-                # 0.35 = e^0.3 - 1 corrects for lack of continuous
-                # compounding in the ABM relative to the ODE's rate of 0.3.
-                CONTACT_RATE=0.35,
-                RECOVERY_RATE=0.1,
-                WANING_RATE=0.005,
-                IMMUNE_STRENGTH=0.7,
-                SEED_COUNT=2,
-                IMMUNITY_FLOOR=0.05,
-                IMMUNITY_CEILING=1.0,
+        .pipe(pfl.alifestd_add_global_root)
+        .pipe(pfl.alifestd_collapse_unifurcations)
+        .pipe(pfl.alifestd_try_add_ancestor_list_col)
+        .pipe(pfl.alifestd_assign_contiguous_ids)
+    )
+
+    assert pfl.alifestd_validate(pruned_df)
+    print(f"phylogeny: {len(phylogeny_df)} total nodes")
+    print(f"downsampled tree: {len(pruned_df)} nodes")
+    print(f"leaf count: {pfl.alifestd_count_leaf_nodes(pruned_df)}")
+
+    fmt = f"0{PHYLO_N_SITES}b"
+    pruned_df = pruned_df.assign(
+        strain=pruned_df["genome"].map(
+            lambda g: None if np.isnan(g) else format(int(g), fmt)[::-1],
+        ),
+    )
+
+    # Strain catalog: every bit string of length N_SITES, ordered by Hamming
+    # weight then lexicographically. A single colorblind palette keyed on this
+    # ordering is shared by phylogeny tips and stackplot layers so the two
+    # panels read together.
+    all_strains = sorted(
+        (format(g, fmt)[::-1] for g in range(2**PHYLO_N_SITES)),
+        key=lambda s: (s.count("1"), s),
+    )
+    palette = dict(
+        zip(all_strains, sns.color_palette("colorblind", len(all_strains))),
+    )
+
+    # iplotx accepts vertex_color as a positional list aligned to rows of the
+    # phyloframe shim; pass hex strings to keep matplotlib happy. The synthetic
+    # global root has no strain → render it as neutral gray.
+    vertex_colors = [
+        "#cccccc" if strain is None else mcolors.to_hex(palette[strain])
+        for strain in pruned_df["strain"]
+    ]
+
+    # Strain prevalence series: any Strain_* column in the timeseries gets
+    # stacked, in the same Hamming-weight ordering as the palette.
+    strain_cols = [
+        f"Strain_{s}" for s in all_strains if f"Strain_{s}" in phylo_df.columns
+    ]
+    stack_strains = [c[len("Strain_") :] for c in strain_cols]
+    steps = phylo_df["Step"].to_numpy()
+    layers = np.stack([phylo_df[c].to_numpy() for c in strain_cols], axis=0)
+    layer_colors = [palette[s] for s in stack_strains]
+
+    with tp.teed(
+        pyplot_phylo.subplots,
+        nrows=1,
+        ncols=2,
+        figsize=(11, 6),
+        gridspec_kw={"width_ratios": [1.1, 1.0]},
+        teeplot_outattrs={
+            "what": "phylogeny",
+            "n_sites": PHYLO_N_SITES,
+        },
+        teeplot_show=True,
+        teeplot_subdir=pathlib.Path(__file__).stem,
+    ) as (fig, axes):
+        ax_tree, ax_stack = axes
+
+        ipx.tree(
+            pfl.alifestd_to_iplotx_pandas(pruned_df),
+            ax=ax_tree,
+            layout="horizontal",
+            vertex_color=vertex_colors,
+            vertex_size=8,
+            edge_linewidth=0.7,
+            margins=0.05,
+        )
+        ax_tree.set_title("pathogen phylogeny (downsampled tips)")
+
+        ax_stack.stackplot(
+            steps,
+            layers,
+            colors=layer_colors,
+            labels=[f"strain {s}" for s in stack_strains],
+        )
+        ax_stack.set_xlim(steps.min(), steps.max())
+        ax_stack.set_ylim(0, layers.sum(axis=0).max() * 1.02)
+        ax_stack.set_xlabel("Step")
+        ax_stack.set_ylabel("Prevalence")
+        ax_stack.set_title("composition by Hamming weight")
+        ax_stack.grid(True, alpha=0.3)
+
+        # Single shared legend at the right edge, ordered by Hamming weight.
+        legend_handles = [
+            pyplot_phylo.Line2D(
+                [0],
+                [0],
+                marker="o",
+                color="w",
+                markerfacecolor=palette[s],
+                markersize=8,
+                label=f"strain {s} (Ham. wt. {s.count('1')})",
             )
-            for rep in range(N_REP)
+            for s in all_strains
         ]
-        df = pd.concat(dfs)
-        render_timeseries_plots(
-            df=df,
-            suptitle=suptitle,
-            teeplot_outattrs={
-                "MUTATION_RATE".lower(): MUTATION_RATE,
-                "N_SITES".lower(): N_SITES,
-                "POP_SIZE".lower(): POP_SIZE,
-            },
-            POP_SIZE=POP_SIZE,
+        ax_stack.legend(
+            handles=legend_handles,
+            loc="center left",
+            bbox_to_anchor=(1.02, 0.5),
+            frameon=False,
         )
-    return
-
-
-@app.cell(hide_code=True)
-def delimit_ode(mo):
-    mo.md(
-        """
-    ## ODE Reference Trajectories
-    """
-    )
-    return
-
-
-@app.cell
-def plot_ode(pd, sns):
-    from matplotlib import pyplot as plt
-
-    try:
-        ode_df = pd.read_csv("https://osf.io/pvfst/download")
-    except Exception as exc:
-        print(f"skipping ODE reference plot: {exc}")
-    else:
-        ode_long = ode_df.melt(
-            id_vars="TIME",
-            var_name="variable",
-            value_name="value",
-        )
-        ode_long["type"] = ode_long["variable"].str.slice(0, 1)
-        sns.relplot(
-            ode_long,
-            x="TIME",
-            y="value",
-            hue="variable",
-            kind="line",
-            col="type",
-            facet_kws=dict(sharey=False),
-        )
-        plt.xlim(0, 1100)
-        plt.gcf().set_size_inches(7, 2.2)
-        plt.tight_layout()
-        sns.move_legend(plt.gcf(), "upper left", bbox_to_anchor=(1, 1))
+        fig.tight_layout()
     return
 
 
