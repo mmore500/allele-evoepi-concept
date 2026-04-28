@@ -701,41 +701,105 @@ def def_make_phylogeny_plot(
                 strip_axes=False,
             )
 
-            _fill_horiz(ax_strain, strain_layers, strain_colors)
-            ax_strain.set_xlim(0, strain_layers.sum(axis=0).max() * 1.02)
+            # sns.kdeplot smooths the per-strain / per-HW timeseries by
+            # treating prevalence-at-step as weights on the step axis.
+            # Center stackplot stacks per-strain bands (each layer keeps
+            # its own normalization); the right-most stackplot fills to 1
+            # so it reads as a HW composition.
+            _strain_long = pd.DataFrame(
+                {
+                    "y": np.tile(y_steps, len(stack_strains)),
+                    "strain": np.repeat(stack_strains, len(steps)),
+                    "w": strain_layers.ravel(),
+                }
+            )
+            _strain_long = _strain_long[_strain_long["w"] > 0]
+            sns.kdeplot(
+                data=_strain_long,
+                y="y",
+                hue="strain",
+                hue_order=stack_strains,
+                weights="w",
+                multiple="stack",
+                common_norm=True,
+                palette={s: strain_palette[s] for s in stack_strains},
+                ax=ax_strain,
+                fill=True,
+                linewidth=0,
+                legend=False,
+                bw_adjust=0.5,
+            )
 
-            _fill_horiz(ax_hw, hw_layers_norm, hw_palette)
-            ax_hw.set_xlim(0, 1)
+            _hw_str = [f"HW {w}" for w in hw_values]
+            _hw_long = pd.DataFrame(
+                {
+                    "y": np.tile(y_steps, len(hw_values)),
+                    "hw": np.repeat(_hw_str, len(steps)),
+                    "w": hw_layers.ravel(),
+                }
+            )
+            _hw_long = _hw_long[_hw_long["w"] > 0]
+            sns.kdeplot(
+                data=_hw_long,
+                y="y",
+                hue="hw",
+                hue_order=_hw_str,
+                weights="w",
+                multiple="fill",
+                common_norm=True,
+                palette={
+                    _hw_str[i]: hw_palette[i] for i in range(len(hw_values))
+                },
+                ax=ax_hw,
+                fill=True,
+                linewidth=0,
+                legend=False,
+                bw_adjust=0.5,
+            )
 
             # Overplot strain bands as thin medium-dark-gray no-fill lines
             # at 50% alpha so individual strains are legible inside their
             # HW band without overpowering the fill; HW boundaries then
             # overplotted with a thicker white line to delimit HW regions.
-            _strain_total = strain_layers.sum(axis=0)
-            _strain_layers_norm = np.where(
-                _strain_total > 0,
-                strain_layers / _strain_total,
-                0.0,
+            sns.kdeplot(
+                data=_strain_long,
+                y="y",
+                hue="strain",
+                hue_order=stack_strains,
+                weights="w",
+                multiple="fill",
+                common_norm=True,
+                palette={s: "#555555" for s in stack_strains},
+                ax=ax_hw,
+                fill=False,
+                linewidth=0.3,
+                alpha=0.5,
+                legend=False,
+                bw_adjust=0.5,
+                zorder=2,
             )
-            _strain_cum = np.cumsum(_strain_layers_norm, axis=0)
-            for _i in range(len(_strain_cum) - 1):
-                ax_hw.plot(
-                    _strain_cum[_i],
-                    y_steps,
-                    color="#555555",
-                    alpha=0.5,
-                    linewidth=0.3,
-                    zorder=2,
-                )
-            _hw_cum = np.cumsum(hw_layers_norm, axis=0)
-            for _i in range(len(_hw_cum) - 1):
-                ax_hw.plot(
-                    _hw_cum[_i],
-                    y_steps,
-                    color="white",
-                    linewidth=1.2,
-                    zorder=3,
-                )
+            sns.kdeplot(
+                data=_hw_long,
+                y="y",
+                hue="hw",
+                hue_order=_hw_str,
+                weights="w",
+                multiple="fill",
+                common_norm=True,
+                palette={s: "white" for s in _hw_str},
+                ax=ax_hw,
+                fill=False,
+                linewidth=1.2,
+                legend=False,
+                bw_adjust=0.5,
+                zorder=3,
+            )
+
+            # Drop the kdeplot's "Density" x-label noise from the stackplot
+            # panels; the bottom-row legends already convey what each axis
+            # encodes.
+            for ax in (ax_strain, ax_hw):
+                ax.set_xlabel("")
 
             # Time axis lives on the leftmost panel; show positive step
             # numbers even though the underlying coordinate is negated to
