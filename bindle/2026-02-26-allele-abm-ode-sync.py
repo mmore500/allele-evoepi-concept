@@ -35,8 +35,7 @@ def import_pkg():
 
 @app.cell(hide_code=True)
 def do_watermark(mo, watermark):
-    mo.md(
-        f"""
+    mo.md(f"""
     ```Text
     {watermark(
         current_date=True,
@@ -48,8 +47,7 @@ def do_watermark(mo, watermark):
         globals_=globals(),
     )}
     ```
-    """
-    )
+    """)
     return
 
 
@@ -62,11 +60,9 @@ def configure_backend(cp, np):
 
 @app.cell(hide_code=True)
 def delimit_simulation(mo):
-    mo.md(
-        """
+    mo.md("""
     ## Simulation Implementation
-    """
-    )
+    """)
     return
 
 
@@ -369,11 +365,9 @@ def def_simulate(Dict, List, Sequence, Tuple, Union, np, pd, random, tqdm, xp):
 
 @app.cell(hide_code=True)
 def delimit_plotting(mo):
-    mo.md(
-        """
+    mo.md("""
     ## Plotting Implementation
-    """
-    )
+    """)
     return
 
 
@@ -506,11 +500,9 @@ def def_plotter(it, np, pathlib, pd, sns, tp):
 
 @app.cell(hide_code=True)
 def delimit_run(mo):
-    mo.md(
-        """
+    mo.md("""
     ## Run Simulation and Render Plots across Condition Matrix
-    """
-    )
+    """)
     return
 
 
@@ -572,11 +564,9 @@ def run_simulation(
 
 @app.cell(hide_code=True)
 def delimit_ode(mo):
-    mo.md(
-        """
+    mo.md("""
     ## ODE Reference Trajectories
-    """
-    )
+    """)
     return
 
 
