@@ -60,9 +60,11 @@ def configure_backend(cp, np):
 
 @app.cell(hide_code=True)
 def delimit_simulation(mo):
-    mo.md("""
+    mo.md(
+        """
     ## Simulation Implementation
-    """)
+    """
+    )
     return
 
 
@@ -464,13 +466,15 @@ def def_simulate(Dict, List, Sequence, Tuple, Union, np, pd, random, tqdm, xp):
 
 @app.cell(hide_code=True)
 def delimit_phylogeny(mo):
-    mo.md("""
+    mo.md(
+        """
     ## Exact Phylogeny Tracking
 
     Run an example with `track_phylogeny=True` to record an alife-standard
     phylogeny (`id` / `ancestor_id` / `origin_time`) of pathogen lineages,
     including extinct lineages, then visualize with `iplotx`.
-    """)
+    """
+    )
     return
 
 
@@ -511,7 +515,8 @@ def peek_phylogeny(phylogeny_df):
 
 @app.cell(hide_code=True)
 def delimit_phylogeny_plot(mo):
-    mo.md("""
+    mo.md(
+        """
     ### Plot Phylogeny with iplotx
 
     Render the full phylogeny (including extinct lineages) via `iplotx`,
@@ -519,7 +524,8 @@ def delimit_phylogeny_plot(mo):
     founder strain; the adjacent stackplot shows population composition over
     time with strains stacked in order of increasing Hamming weight so
     bit-weight composition reads bottom-to-top.
-    """)
+    """
+    )
     return
 
 
