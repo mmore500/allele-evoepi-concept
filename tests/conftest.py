@@ -1,4 +1,5 @@
 """Configuration file for pytest."""
+
 # adapted from hstrat
 # https://github.com/mmore500/hstrat/blob/1bfac67849c51bd1b82fd6010487906196136be8/tests/test_hstrat/conftest.py
 
