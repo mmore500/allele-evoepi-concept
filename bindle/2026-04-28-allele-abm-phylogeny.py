@@ -297,21 +297,25 @@ def def_simulate(Dict, List, Sequence, Tuple, Union, np, pd, random, tqdm, xp):
             ]
 
             if track_phylogeny:
-                new_idx = xp.where(new_infections)[0].tolist()
-                src_node_ids = pathogen_node_ids[
-                    contacts[new_infections]
-                ].tolist()
-                src_genomes = pathogen_genomes[new_infections].tolist()
-                for idx, anc_id, gnm in zip(
-                    new_idx, src_node_ids, src_genomes
-                ):
-                    nid = next_node_id[0]
-                    phylo_ids.append(nid)
-                    phylo_ancestor_ids.append(int(anc_id))
-                    phylo_origin_times.append(int(step))
-                    phylo_genomes.append(int(gnm))
-                    pathogen_node_ids[idx] = nid
-                    next_node_id[0] += 1
+                # Bulk-extend Python lists (per-event appends are ~10x slower
+                # at million-event scale).
+                new_idx = xp.where(new_infections)[0]
+                n_new = int(new_idx.size)
+                if n_new:
+                    src_node_ids = pathogen_node_ids[contacts[new_infections]]
+                    new_ids = xp.arange(
+                        next_node_id[0],
+                        next_node_id[0] + n_new,
+                        dtype=xp.int64,
+                    )
+                    phylo_ids.extend(new_ids.tolist())
+                    phylo_ancestor_ids.extend(src_node_ids.tolist())
+                    phylo_origin_times.extend([int(step)] * n_new)
+                    phylo_genomes.extend(
+                        pathogen_genomes[new_infections].tolist(),
+                    )
+                    pathogen_node_ids[new_idx] = new_ids
+                    next_node_id[0] += n_new
 
             return host_statuses, pathogen_genomes, pathogen_node_ids
 
@@ -471,10 +475,12 @@ def delimit_phylogeny(mo):
 
 @app.cell
 def run_phylogeny_simulation(simulate):
-    PHYLO_POP_SIZE = 10_000
-    PHYLO_N_STEPS = 200
-    PHYLO_N_SITES = 3
-    PHYLO_MUTATION_RATE = 1e-3
+    # Baseline ABM/ODE-sync params from the sync notebook, scaled up for an
+    # exact-phylogeny demo at 200k pop x 600 steps.
+    PHYLO_POP_SIZE = 200_000
+    PHYLO_N_STEPS = 600
+    PHYLO_N_SITES = 2
+    PHYLO_MUTATION_RATE = 5e-5
 
     phylo_df, phylogeny_df = simulate(
         MUTATION_RATE=PHYLO_MUTATION_RATE,
@@ -535,10 +541,10 @@ def plot_phylogeny(
     from phyloframe import legacy as pfl
 
     # Keep extinct lineages — uniform tip downsampling (and a unifurcation
-    # collapse) is enough to keep the rendered tree legible (<10k tips).
-    # Add a synthetic global root so iplotx sees one root even when the sim
-    # had multiple seeds.
-    MAX_TIPS = 500
+    # collapse) is enough to keep the rendered tree legible. Synthetic global
+    # root collapses multi-seed origins to a single root (iplotx requirement).
+    # Ladderize last so the rendering reflects the final topology.
+    MAX_TIPS = 10_000
     pruned_df = (
         pfl.alifestd_downsample_tips_uniform_asexual(
             phylogeny_df,
@@ -547,8 +553,10 @@ def plot_phylogeny(
         )
         .pipe(pfl.alifestd_add_global_root)
         .pipe(pfl.alifestd_collapse_unifurcations)
-        .pipe(pfl.alifestd_ladderize_asexual)
         .pipe(pfl.alifestd_try_add_ancestor_list_col)
+        # Ladderize as the final structural step, then re-assign contiguous
+        # ids so id == row index (iplotx requirement).
+        .pipe(pfl.alifestd_ladderize_asexual)
         .pipe(pfl.alifestd_assign_contiguous_ids)
     )
 
