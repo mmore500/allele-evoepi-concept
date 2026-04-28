@@ -553,6 +553,7 @@ def plot_phylogeny(
         )
         .pipe(pfl.alifestd_add_global_root)
         .pipe(pfl.alifestd_collapse_unifurcations)
+        .pipe(pfl.alifestd_ladderize_asexual)
         .pipe(pfl.alifestd_try_add_ancestor_list_col)
         .pipe(pfl.alifestd_assign_contiguous_ids)
     )
