@@ -1179,14 +1179,14 @@ def run_phylogeny_sweep(
 ):
     # Sweep over (16, 32, 64)-bit genomes × `N_REPLICATES` replicate seeds.
     # Each replicate gets a fresh `replicate_uid`; the same uid is stamped
-    # onto rows in both the trajectory parquet and the phylogeny parquet so
-    # joins across the two files are unambiguous. `MAX_SAMPLED_TAXA` caps
-    # memory: it bounds the number of (snapshot × infected-host) sample
-    # rows that flow into `surface_unpack_reconstruct`. With
-    # `MAX_SAMPLED_TAXA=1` and `SNAPSHOT_INTERVAL=1`, an `N_STEPS`-step run
-    # produces at most `N_STEPS - DSTREAM_S` records (each ~1 KB of hex).
-    # Use the canonical 64-bit hybrid algo,
-    # `dstream.hybrid_0_steady_1_tilted_2_algo`.
+    # onto rows in the trajectory, raw-records, and reconstructed-phylogeny
+    # parquets so joins across the three files are unambiguous.
+    # `MAX_SAMPLED_TAXA` caps memory: it bounds the number of (snapshot ×
+    # infected-host) sample rows that flow into
+    # `surface_unpack_reconstruct`. With `MAX_SAMPLED_TAXA=1` and
+    # `SNAPSHOT_INTERVAL=1`, an `N_STEPS`-step run produces at most
+    # `N_STEPS - DSTREAM_S` records (each ~1 KB of hex). Use the canonical
+    # 64-bit hybrid algo, `dstream.hybrid_0_steady_1_tilted_2_algo`.
     PHYLO_MUTATION_RATE = 1e-5
 
     nbname = pathlib.Path(__file__).stem
@@ -1194,6 +1194,7 @@ def run_phylogeny_sweep(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     traj_chunks = []
+    records_chunks = []
     phylo_chunks = []
 
     for _seed in range(1, N_REPLICATES + 1):
@@ -1223,8 +1224,9 @@ def run_phylogeny_sweep(
             print(f"  snapshot rows: {len(_records_df)}")
 
             # Stamp every row with the replicate's parameter key + uid so
-            # the per-replicate trajectory + phylogeny files can be split
-            # apart again downstream by filtering on `replicate_uid`.
+            # the per-replicate trajectory, records, and phylogeny files
+            # can be split apart again downstream by filtering on
+            # `replicate_uid`.
             _params = {
                 "replicate_uid": replicate_uid,
                 "seed": _seed,
@@ -1234,6 +1236,13 @@ def run_phylogeny_sweep(
                 "engine": ENGINE,
             }
             traj_chunks.append(_phylo_df.assign(**_params))
+            # Save the *raw* surface records (the input to
+            # `surface_unpack_reconstruct`) so reconstruction can be re-run
+            # downstream without re-simulating. Empty records frames are
+            # appended too — they preserve the (replicate_uid, params)
+            # bookkeeping for replicates whose lineage died before
+            # `dstream_S` deposits accumulated.
+            records_chunks.append(_records_df.assign(**_params))
 
             if len(_records_df) == 0:
                 print("  (no infected hosts past S=64 — skipping plot)")
@@ -1261,12 +1270,18 @@ def run_phylogeny_sweep(
             del _phylo_df, _phylogeny_df
             gc.collect()
 
-    # Concat-across-replicates → two parquet files (trajectory + phylogeny).
-    # `Strain_*` / `Susc_*` columns vary in cardinality across `N_SITES`,
-    # so missing columns auto-fill NaN on concat — that's expected.
+    # Concat-across-replicates → three parquet files (trajectory, raw
+    # records, reconstructed phylogeny). `Strain_*` / `Susc_*` columns vary
+    # in cardinality across `N_SITES`, so missing columns auto-fill NaN on
+    # concat — that's expected.
     traj_df_all = (
         pd.concat(traj_chunks, ignore_index=True)
         if traj_chunks
+        else pd.DataFrame()
+    )
+    records_df_all = (
+        pd.concat(records_chunks, ignore_index=True)
+        if records_chunks
         else pd.DataFrame()
     )
     phylo_df_all = (
@@ -1276,10 +1291,13 @@ def run_phylogeny_sweep(
     )
 
     traj_path = out_dir / f"a=traj+what={nbname}+ext=.pqt"
+    records_path = out_dir / f"a=records+what={nbname}+ext=.pqt"
     phylo_path = out_dir / f"a=phylo+what={nbname}+ext=.pqt"
     traj_df_all.to_parquet(traj_path, index=False)
+    records_df_all.to_parquet(records_path, index=False)
     phylo_df_all.to_parquet(phylo_path, index=False)
     print(f"wrote trajectory parquet ({len(traj_df_all)} rows): {traj_path}")
+    print(f"wrote records parquet ({len(records_df_all)} rows): {records_path}")
     print(f"wrote phylogeny parquet ({len(phylo_df_all)} rows): {phylo_path}")
     return
 
