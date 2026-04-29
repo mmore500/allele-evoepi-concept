@@ -10,8 +10,9 @@ def import_std():
     import pathlib
     import random
     from typing import Dict, List, Sequence, Tuple, Union
+    import uuid
 
-    return Dict, List, Sequence, Tuple, Union, gc, pathlib, random
+    return Dict, List, Sequence, Tuple, Union, gc, pathlib, random, uuid
 
 
 @app.cell
@@ -84,8 +85,31 @@ def do_watermark(mo, watermark):
 
 
 @app.cell
-def configure_backend(cp, np):
-    use_cupy = False  # use cupy backend (GPU), otherwise use numpy (CPU)
+def configure_args(mo):
+    # Marimo CLI args (set via `marimo edit notebook.py -- --pop-size N ...`
+    # or `marimo export ipynb ... -- --pop-size N ...`). Defaults match the
+    # current sweep settings: POP_SIZE=200_000 hosts and N_STEPS=100 steps.
+    _args = mo.cli_args()
+    POP_SIZE = int(_args.get("pop-size") or 200_000)
+    N_STEPS = int(_args.get("n-steps") or 100)
+    N_REPLICATES = int(_args.get("n-replicates") or 3)
+    ENGINE = str(_args.get("engine") or "numpy").lower()
+    if ENGINE not in ("numpy", "cupy"):
+        raise ValueError(
+            f"engine must be 'numpy' or 'cupy', got {ENGINE!r}",
+        )
+    print(
+        f"args: POP_SIZE={POP_SIZE} N_STEPS={N_STEPS} "
+        f"N_REPLICATES={N_REPLICATES} ENGINE={ENGINE}",
+    )
+    return ENGINE, N_REPLICATES, N_STEPS, POP_SIZE
+
+
+@app.cell
+def configure_backend(ENGINE, cp, np):
+    use_cupy = (
+        ENGINE == "cupy"
+    )  # use cupy backend (GPU), otherwise numpy (CPU)
     xp = [np, cp][use_cupy]
     return (xp,)
 
@@ -95,11 +119,15 @@ def delimit_simulation(mo):
     mo.md("""
     ## Simulation Implementation
 
-    This notebook is the 32-site variant of
+    This notebook is the wide-genome variant of
     `2026-04-28-allele-abm-phylogeny-hstrat.py`: pathogen genomes are widened
-    from 16-bit to 32-bit so up to `N_SITES=32` allele loci can be tracked,
-    and the phylogeny sweep runs 1.5× longer (12,000 steps) to give the
-    larger sequence space time to explore. Phylogeny estimation still uses
+    so up to `N_SITES=64` allele loci can be tracked (the genome dtype is
+    chosen automatically — `uint16`/`uint32`/`uint64` for `N_SITES <=
+    16`/`32`/`64`), and the phylogeny sweep loops over all three bit-widths
+    so the resulting reconstructions can be compared side by side.
+    Population size, simulation length, replicate count, and array engine
+    (`numpy`/`cupy`) are all passed in as marimo CLI args (see the
+    `configure_args` cell). Phylogeny estimation still uses
     *hereditary stratigraphic surface* annotations (see
     https://hstrat.rtfd.io). Each infected host carries a `dstream_S=64`-site,
     64-bit "hybrid" surface that ingests one differentia per simulation step;
@@ -163,10 +191,19 @@ def def_simulate(
 
         MUTATION_RATE = xp.asarray(MUTATION_RATE, dtype=xp.float32)
 
-        if N_SITES > 32:
+        # Pick the smallest unsigned int dtype that holds `N_SITES` bits.
+        # 16/32/64-site sweeps round-trip through uint16/uint32/uint64
+        # without truncation; >64 would need a custom multi-word genome.
+        if N_SITES > 64:
             raise NotImplementedError(
-                "current data types support only up to 32 sites",
+                "current data types support only up to 64 sites",
             )
+        elif N_SITES > 32:
+            genome_dtype = xp.uint64
+        elif N_SITES > 16:
+            genome_dtype = xp.uint32
+        else:
+            genome_dtype = xp.uint16
 
         # Vectorized hstrat surface state. Shape (POP_SIZE, S) uint64; each
         # row mirrors a `HereditaryStratigraphicSurface(stratum_differentia_
@@ -191,8 +228,9 @@ def def_simulate(
             Tuple[xp.ndarray, xp.ndarray, xp.ndarray, xp.ndarray]
         ):
             """Initialize population statuses, genomes, and immune history."""
-            # uint32 to support up to 32 sites (uint16 caps at 16).
-            pathogen_genomes = xp.zeros(shape=POP_SIZE, dtype=xp.uint32)
+            # `genome_dtype` is sized to fit `N_SITES` bits — `uint16` for
+            # `N_SITES <= 16`, `uint32` up to 32, `uint64` up to 64.
+            pathogen_genomes = xp.zeros(shape=POP_SIZE, dtype=genome_dtype)
             host_immunities = xp.full(
                 shape=(POP_SIZE, 2 * N_SITES),
                 fill_value=0.0,
@@ -244,7 +282,7 @@ def def_simulate(
             )
 
             pathogen_bits = (
-                pathogen_genomes[:, None] >> xp.arange(N_SITES)
+                pathogen_genomes[:, None] >> xp.arange(N_SITES, dtype=xp.uint8)
             ) & 1
             pathogen_alleles = (
                 pathogen_bits[:, :, None] == xp.array([0, 1])
@@ -264,7 +302,7 @@ def def_simulate(
                 pathogen_genomes: xp.ndarray,
             ) -> xp.ndarray:
                 pathogen_bits = (
-                    pathogen_genomes[:, None] >> xp.arange(N_SITES)
+                    pathogen_genomes[:, None] >> xp.arange(N_SITES, dtype=xp.uint8)
                 ) & 1
 
                 imm_reshaped = xp.reshape(host_immunities, (-1, N_SITES, 2))
@@ -327,7 +365,7 @@ def def_simulate(
             ) > 1 - RECOVERY_RATE
 
             pathogen_bits = (
-                pathogen_genomes[:, None] >> xp.arange(N_SITES)
+                pathogen_genomes[:, None] >> xp.arange(N_SITES, dtype=xp.uint8)
             ) & 1
             pathogen_alleles = (
                 pathogen_bits[:, :, None] == xp.array([0, 1])
@@ -402,10 +440,10 @@ def def_simulate(
             for s in range(N_SITES):
                 mutation_occurs = (
                     xp.random.rand(mprobs.shape[0]) < mprobs[:, s]
-                ).astype(xp.uint32)
+                ).astype(genome_dtype)
                 pathogen_genomes[mutation_mask] ^= (
                     mutation_occurs << s
-                ).astype(xp.uint32)
+                ).astype(genome_dtype)
 
             return pathogen_genomes
 
@@ -952,7 +990,7 @@ def def_make_phylogeny_plot(
                 "what": "phylogeny",
                 "n_sites": N_SITES,
                 "n_steps": int(phylo_df["Step"].max()) + 1,
-                "seed": seed,
+                "replicate": seed,
                 "method": "hstrat-surface",
             },
             teeplot_show=True,
@@ -1127,34 +1165,49 @@ def def_make_phylogeny_plot(
 
 @app.cell
 def run_phylogeny_sweep(
+    ENGINE,
+    N_REPLICATES,
+    N_STEPS,
+    POP_SIZE,
     gc,
     make_phylogeny_plot,
+    pathlib,
+    pd,
     reconstruct_phylogeny,
     simulate,
+    uuid,
 ):
-    # Sweep at the widened 32-site genome only, for 1.5× the runtime of
-    # the 16-site notebook (12,000 steps × 3 replicates) so the resulting
-    # reconstructed phylogenies have time to coalesce into informative
-    # topology over the larger sequence space. `MAX_SAMPLED_TAXA` caps
-    # memory; it bounds the number of (snapshot × infected-host) sample
+    # Sweep over (16, 32, 64)-bit genomes × `N_REPLICATES` replicate seeds.
+    # Each replicate gets a fresh `replicate_uid`; the same uid is stamped
+    # onto rows in both the trajectory parquet and the phylogeny parquet so
+    # joins across the two files are unambiguous. `MAX_SAMPLED_TAXA` caps
+    # memory: it bounds the number of (snapshot × infected-host) sample
     # rows that flow into `surface_unpack_reconstruct`. With
-    # `MAX_SAMPLED_TAXA=1` and `SNAPSHOT_INTERVAL=1`, a 12,000-step run
-    # produces ~12k records (each ~1 KB of hex), keeping the records
-    # dataframe + reconstruction intermediate buffers well under the
-    # ~12 GB GitHub-runner memory budget. Use the canonical 64-bit hybrid
-    # algo, `dstream.hybrid_0_steady_1_tilted_2_algo`.
-    PHYLO_POP_SIZE = 200_000
-    PHYLO_N_STEPS = 12_000
+    # `MAX_SAMPLED_TAXA=1` and `SNAPSHOT_INTERVAL=1`, an `N_STEPS`-step run
+    # produces at most `N_STEPS - DSTREAM_S` records (each ~1 KB of hex).
+    # Use the canonical 64-bit hybrid algo,
+    # `dstream.hybrid_0_steady_1_tilted_2_algo`.
     PHYLO_MUTATION_RATE = 1e-5
 
-    for _seed in (1, 2, 3):
-        for PHYLO_N_SITES in (32,):
-            print(f"=== seed={_seed} N_SITES={PHYLO_N_SITES} ===")
+    nbname = pathlib.Path(__file__).stem
+    out_dir = pathlib.Path("outdata") / nbname
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    traj_chunks = []
+    phylo_chunks = []
+
+    for _seed in range(1, N_REPLICATES + 1):
+        for PHYLO_N_SITES in (16, 32, 64):
+            replicate_uid = uuid.uuid4().hex
+            print(
+                f"=== seed={_seed} N_SITES={PHYLO_N_SITES} "
+                f"uid={replicate_uid} ===",
+            )
             _phylo_df, _records_df = simulate(
                 MUTATION_RATE=PHYLO_MUTATION_RATE,
                 N_SITES=PHYLO_N_SITES,
-                N_STEPS=PHYLO_N_STEPS,
-                POP_SIZE=PHYLO_POP_SIZE,
+                N_STEPS=N_STEPS,
+                POP_SIZE=POP_SIZE,
                 CONTACT_RATE=0.35,
                 RECOVERY_RATE=0.1,
                 WANING_RATE=0.02,
@@ -1168,6 +1221,20 @@ def run_phylogeny_sweep(
                 SNAPSHOT_INTERVAL=1,
             )
             print(f"  snapshot rows: {len(_records_df)}")
+
+            # Stamp every row with the replicate's parameter key + uid so
+            # the per-replicate trajectory + phylogeny files can be split
+            # apart again downstream by filtering on `replicate_uid`.
+            _params = {
+                "replicate_uid": replicate_uid,
+                "seed": _seed,
+                "n_sites": PHYLO_N_SITES,
+                "pop_size": POP_SIZE,
+                "n_steps": N_STEPS,
+                "engine": ENGINE,
+            }
+            traj_chunks.append(_phylo_df.assign(**_params))
+
             if len(_records_df) == 0:
                 print("  (no infected hosts past S=64 — skipping plot)")
                 del _phylo_df, _records_df
@@ -1182,6 +1249,9 @@ def run_phylogeny_sweep(
             gc.collect()
             print(f"  reconstructed: {len(_phylogeny_df)} nodes")
             print(f"  extant tips: {int(_phylogeny_df['extant'].sum())}")
+
+            phylo_chunks.append(_phylogeny_df.assign(**_params))
+
             make_phylogeny_plot(
                 PHYLO_N_SITES,
                 _phylo_df,
@@ -1190,6 +1260,27 @@ def run_phylogeny_sweep(
             )
             del _phylo_df, _phylogeny_df
             gc.collect()
+
+    # Concat-across-replicates → two parquet files (trajectory + phylogeny).
+    # `Strain_*` / `Susc_*` columns vary in cardinality across `N_SITES`,
+    # so missing columns auto-fill NaN on concat — that's expected.
+    traj_df_all = (
+        pd.concat(traj_chunks, ignore_index=True)
+        if traj_chunks
+        else pd.DataFrame()
+    )
+    phylo_df_all = (
+        pd.concat(phylo_chunks, ignore_index=True)
+        if phylo_chunks
+        else pd.DataFrame()
+    )
+
+    traj_path = out_dir / f"a=traj+what={nbname}+ext=.pqt"
+    phylo_path = out_dir / f"a=phylo+what={nbname}+ext=.pqt"
+    traj_df_all.to_parquet(traj_path, index=False)
+    phylo_df_all.to_parquet(phylo_path, index=False)
+    print(f"wrote trajectory parquet ({len(traj_df_all)} rows): {traj_path}")
+    print(f"wrote phylogeny parquet ({len(phylo_df_all)} rows): {phylo_path}")
     return
 
 
