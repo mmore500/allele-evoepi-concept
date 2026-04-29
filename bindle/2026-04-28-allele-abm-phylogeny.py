@@ -83,17 +83,6 @@ def configure_backend(cp, np):
     return (xp,)
 
 
-@app.cell
-def cli_params(mo):
-    # Pulled from `mo.cli_args()` so the sweep can be re-parametrized at
-    # export time, e.g. `marimo export ipynb ... -- --pop-size=50000
-    # --n-steps=500` for a quick smoke run without editing the notebook.
-    _cli = mo.cli_args()
-    PHYLO_POP_SIZE = int(_cli.get("pop-size") or 200_000)
-    PHYLO_N_STEPS = int(_cli.get("n-steps") or 100)
-    return PHYLO_N_STEPS, PHYLO_POP_SIZE
-
-
 @app.cell(hide_code=True)
 def delimit_simulation(mo):
     mo.md(
@@ -880,14 +869,14 @@ def def_make_phylogeny_plot(
 
 
 @app.cell
-def run_phylogeny_sweep(
-    PHYLO_N_STEPS, PHYLO_POP_SIZE, make_phylogeny_plot, simulate,
-):
+def run_phylogeny_sweep(make_phylogeny_plot, simulate):
     # Baseline ABM/ODE-sync params; sweep N_SITES across a few genome sizes
     # to compare the resulting phylogenies. POP_SIZE / N_STEPS pulled in
     # from the sync notebook's regime; WANING_RATE bumped to 0.02 because
     # at the original 0.005 immunity saturates and larger genome runs go
     # extinct before the dynamics settle.
+    PHYLO_POP_SIZE = 200_000
+    PHYLO_N_STEPS = 2_000
     PHYLO_MUTATION_RATE = 1e-5
 
     # 3 replicates per N_SITES: outer seed, inner N_SITES so each plot
