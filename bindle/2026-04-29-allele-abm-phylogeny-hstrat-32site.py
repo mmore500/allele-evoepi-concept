@@ -116,7 +116,8 @@ def configure_backend(ENGINE, cp, np):
 
 @app.cell(hide_code=True)
 def delimit_simulation(mo):
-    mo.md("""
+    mo.md(
+        """
     ## Simulation Implementation
 
     This notebook is the wide-genome variant of
@@ -139,7 +140,8 @@ def delimit_simulation(mo):
 
     The vectorized deposit pattern is adapted from
     https://github.com/mmore500/hstrat-synthesis (see `pylib/track_ca.py`).
-    """)
+    """
+    )
     return
 
 
@@ -302,7 +304,8 @@ def def_simulate(
                 pathogen_genomes: xp.ndarray,
             ) -> xp.ndarray:
                 pathogen_bits = (
-                    pathogen_genomes[:, None] >> xp.arange(N_SITES, dtype=xp.uint8)
+                    pathogen_genomes[:, None]
+                    >> xp.arange(N_SITES, dtype=xp.uint8)
                 ) & 1
 
                 imm_reshaped = xp.reshape(host_immunities, (-1, N_SITES, 2))
@@ -744,7 +747,8 @@ def def_simulate(
 
 @app.cell(hide_code=True)
 def delimit_reconstruct(mo):
-    mo.md("""
+    mo.md(
+        """
     ## Surface-Annotation Reconstruction
 
     Given the snapshot records emitted by `simulate(..., track_phylogeny=
@@ -753,7 +757,8 @@ def delimit_reconstruct(mo):
     tree. We use `AssignOriginTimeNodeRankTriePostprocessor(t0="dstream_S")`
     so that origin times line up with simulation step numbers (the trunk
     deposits at `dstream_rank < dstream_S` are deleted by default).
-    """)
+    """
+    )
     return
 
 
@@ -807,14 +812,16 @@ def def_reconstruct_phylogeny(gc, hstrat, pd, pl):
 
 @app.cell(hide_code=True)
 def delimit_phylogeny(mo):
-    mo.md("""
+    mo.md(
+        """
     ## Surface-Reconstructed Phylogeny
 
     Sweep `N_SITES` over a few values and render the surface-reconstructed
     phylogeny next to the absolute-prevalence and Hamming-weight stackplots,
     matching the layout of `2026-04-28-allele-abm-phylogeny.py`. Tips and the
     stackplots share a per-strain `husl` palette.
-    """)
+    """
+    )
     return
 
 
@@ -1297,7 +1304,9 @@ def run_phylogeny_sweep(
     records_df_all.to_parquet(records_path, index=False)
     phylo_df_all.to_parquet(phylo_path, index=False)
     print(f"wrote trajectory parquet ({len(traj_df_all)} rows): {traj_path}")
-    print(f"wrote records parquet ({len(records_df_all)} rows): {records_path}")
+    print(
+        f"wrote records parquet ({len(records_df_all)} rows): {records_path}"
+    )
     print(f"wrote phylogeny parquet ({len(phylo_df_all)} rows): {phylo_path}")
     return
 
