@@ -555,9 +555,7 @@ def def_simulate(
                     >> xp.arange(N_SITES, dtype=xp.uint8)
                 ) & 1
                 hw_per_host = infected_bits.sum(axis=1).astype(xp.int64)
-                hw_counts_arr = xp.bincount(
-                    hw_per_host, minlength=N_SITES + 1
-                )
+                hw_counts_arr = xp.bincount(hw_per_host, minlength=N_SITES + 1)
                 hw_prevalences = [
                     float(c) / POP_SIZE for c in hw_counts_arr.tolist()
                 ]
@@ -957,7 +955,9 @@ def def_make_phylogeny_plot(
             sns.despine(ax=ax_hw, left=True, bottom=True, top=False)
 
             ax_hw.legend(
-                handles=[_hw_handle(w, label) for w, label in hw_legend_entries],
+                handles=[
+                    _hw_handle(w, label) for w, label in hw_legend_entries
+                ],
                 title="Hamming weight",
                 loc="center left",
                 bbox_to_anchor=(1.02, 0.5),
