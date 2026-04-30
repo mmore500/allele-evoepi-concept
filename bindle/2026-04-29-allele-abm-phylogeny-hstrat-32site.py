@@ -56,7 +56,6 @@ def import_pkg():
         pfl,
         pl,
         plt,
-        rescale_stacked_kdeplot,
         sns,
         tp,
         tqdm,
@@ -92,7 +91,7 @@ def configure_args(mo):
     _args = mo.cli_args()
     POP_SIZE = int(_args.get("pop-size") or 200_000)
     N_STEPS = int(_args.get("n-steps") or 100)
-    N_REPLICATES = int(_args.get("n-replicates") or 3)
+    N_REPLICATES = int(_args.get("n-replicates") or 1)
     ENGINE = str(_args.get("engine") or "numpy").lower()
     if ENGINE not in ("numpy", "cupy"):
         raise ValueError(
