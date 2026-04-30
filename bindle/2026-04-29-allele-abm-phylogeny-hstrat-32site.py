@@ -842,7 +842,6 @@ def def_make_phylogeny_plot(
     pd,
     pfl,
     plt,
-    rescale_stacked_kdeplot,
     sns,
     tp,
 ):
@@ -1028,31 +1027,31 @@ def def_make_phylogeny_plot(
                 strip_axes=False,
             )
 
-            _strain_long = pd.DataFrame(
+            _hw_str = [f"HW {w}" for w in hw_values]
+            _hw_long = pd.DataFrame(
                 {
-                    "y": np.tile(y_steps, len(stack_strains)),
-                    "strain": np.repeat(stack_strains, len(steps)),
-                    "w": strain_layers.ravel(),
+                    "y": np.tile(y_steps, len(hw_values)),
+                    "hw": np.repeat(_hw_str, len(steps)),
+                    "w": hw_layers.ravel(),
                 }
             )
-            _strain_long = _strain_long[_strain_long["w"] > 0]
-            sns.kdeplot(
-                data=_strain_long,
+            _hw_long = _hw_long[_hw_long["w"] > 0]
+            sns.histplot(
+                data=_hw_long,
                 y="y",
-                hue="strain",
-                hue_order=stack_strains,
+                hue="hw",
+                hue_order=_hw_str,
                 weights="w",
+                binwidth=phylo_df["Step"].diff().min(),
                 multiple="stack",
-                common_norm=True,
-                cut=0,
-                palette={s: strain_palette[s] for s in stack_strains},
+                stat="count",
+                element="poly",
+                palette={s: hw_palette[i] for i, s in enumerate(_hw_str)},
                 ax=ax_strain,
                 fill=True,
                 linewidth=0,
                 legend=False,
-                bw_adjust=0.5,
             )
-            rescale_stacked_kdeplot(ax_strain, orient="y", scale="log")
             _band_xs = [
                 c.get_paths()[0].vertices[:, 0].max()
                 for c in ax_strain.collections
@@ -1063,7 +1062,6 @@ def def_make_phylogeny_plot(
                 _lo, _ = ax_strain.get_xlim()
                 ax_strain.set_xlim(_lo, _peak * 1.05)
 
-            _hw_str = [f"HW {w}" for w in hw_values]
             _hw_long = pd.DataFrame(
                 {
                     "y": np.tile(y_steps, len(hw_values)),
@@ -1089,42 +1087,6 @@ def def_make_phylogeny_plot(
                 linewidth=0,
                 legend=False,
                 bw_adjust=0.5,
-            )
-
-            sns.kdeplot(
-                data=_strain_long,
-                y="y",
-                hue="strain",
-                hue_order=stack_strains,
-                weights="w",
-                multiple="fill",
-                common_norm=True,
-                cut=0,
-                palette={s: "#555555" for s in stack_strains},
-                ax=ax_hw,
-                fill=False,
-                linewidth=0.3,
-                alpha=0.5,
-                legend=False,
-                bw_adjust=0.5,
-                zorder=2,
-            )
-            sns.kdeplot(
-                data=_hw_long,
-                y="y",
-                hue="hw",
-                hue_order=_hw_str,
-                weights="w",
-                multiple="fill",
-                common_norm=True,
-                cut=0,
-                palette={s: "white" for s in _hw_str},
-                ax=ax_hw,
-                fill=False,
-                linewidth=1.2,
-                legend=False,
-                bw_adjust=0.5,
-                zorder=3,
             )
 
             for ax in (ax_strain, ax_hw):
