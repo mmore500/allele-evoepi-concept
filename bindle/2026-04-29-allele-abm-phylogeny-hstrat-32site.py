@@ -289,10 +289,18 @@ def def_simulate(
                 pathogen_bits[:, :, None] == xp.array([0, 1])
             ).reshape(-1, 2 * N_SITES)
 
+            # active_susc = xp.where(
+            #     pathogen_alleles, host_susceptibilities, 1.0
+            # )
+            # res = xp.prod(active_susc, axis=1)
             active_susc = xp.where(
-                pathogen_alleles, host_susceptibilities, 1.0
+                pathogen_alleles, host_susceptibilities, np.nan
             )
-            res = xp.prod(active_susc, axis=1)
+            res = (
+                xp.nanmean(active_susc, axis=1)
+                * xp.nanmax(active_susc, axis=1)
+                * xp.nanmin(host_susceptibilities, axis=1)
+            )
             assert res.shape == (POP_SIZE,)
             return res
 
