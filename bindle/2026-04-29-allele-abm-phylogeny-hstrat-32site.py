@@ -56,7 +56,6 @@ def import_pkg():
         pfl,
         pl,
         plt,
-        rescale_stacked_kdeplot,
         sns,
         tp,
         tqdm,
@@ -92,7 +91,7 @@ def configure_args(mo):
     _args = mo.cli_args()
     POP_SIZE = int(_args.get("pop-size") or 200_000)
     N_STEPS = int(_args.get("n-steps") or 100)
-    N_REPLICATES = int(_args.get("n-replicates") or 3)
+    N_REPLICATES = int(_args.get("n-replicates") or 1)
     ENGINE = str(_args.get("engine") or "numpy").lower()
     if ENGINE not in ("numpy", "cupy"):
         raise ValueError(
@@ -290,10 +289,18 @@ def def_simulate(
                 pathogen_bits[:, :, None] == xp.array([0, 1])
             ).reshape(-1, 2 * N_SITES)
 
+            # active_susc = xp.where(
+            #     pathogen_alleles, host_susceptibilities, 1.0
+            # )
+            # res = xp.prod(active_susc, axis=1)
             active_susc = xp.where(
-                pathogen_alleles, host_susceptibilities, 1.0
+                pathogen_alleles, host_susceptibilities, np.nan
             )
-            res = xp.prod(active_susc, axis=1)
+            res = (
+                xp.nanmean(active_susc, axis=1)
+                * xp.nanmax(active_susc, axis=1)
+                * xp.nanmin(host_susceptibilities, axis=1)
+            )
             assert res.shape == (POP_SIZE,)
             return res
 
@@ -835,7 +842,6 @@ def def_make_phylogeny_plot(
     pd,
     pfl,
     plt,
-    rescale_stacked_kdeplot,
     sns,
     tp,
 ):
@@ -1021,31 +1027,31 @@ def def_make_phylogeny_plot(
                 strip_axes=False,
             )
 
-            _strain_long = pd.DataFrame(
+            _hw_str = [f"HW {w}" for w in hw_values]
+            _hw_long = pd.DataFrame(
                 {
-                    "y": np.tile(y_steps, len(stack_strains)),
-                    "strain": np.repeat(stack_strains, len(steps)),
-                    "w": strain_layers.ravel(),
+                    "y": np.tile(y_steps, len(hw_values)),
+                    "hw": np.repeat(_hw_str, len(steps)),
+                    "w": hw_layers.ravel(),
                 }
             )
-            _strain_long = _strain_long[_strain_long["w"] > 0]
-            sns.kdeplot(
-                data=_strain_long,
+            _hw_long = _hw_long[_hw_long["w"] > 0]
+            sns.histplot(
+                data=_hw_long,
                 y="y",
-                hue="strain",
-                hue_order=stack_strains,
+                hue="hw",
+                hue_order=_hw_str,
                 weights="w",
+                binwidth=phylo_df["Step"].diff().min(),
                 multiple="stack",
-                common_norm=True,
-                cut=0,
-                palette={s: strain_palette[s] for s in stack_strains},
+                stat="count",
+                element="poly",
+                palette={s: hw_palette[i] for i, s in enumerate(_hw_str)},
                 ax=ax_strain,
                 fill=True,
                 linewidth=0,
                 legend=False,
-                bw_adjust=0.5,
             )
-            rescale_stacked_kdeplot(ax_strain, orient="y", scale="log")
             _band_xs = [
                 c.get_paths()[0].vertices[:, 0].max()
                 for c in ax_strain.collections
@@ -1056,7 +1062,6 @@ def def_make_phylogeny_plot(
                 _lo, _ = ax_strain.get_xlim()
                 ax_strain.set_xlim(_lo, _peak * 1.05)
 
-            _hw_str = [f"HW {w}" for w in hw_values]
             _hw_long = pd.DataFrame(
                 {
                     "y": np.tile(y_steps, len(hw_values)),
@@ -1082,42 +1087,6 @@ def def_make_phylogeny_plot(
                 linewidth=0,
                 legend=False,
                 bw_adjust=0.5,
-            )
-
-            sns.kdeplot(
-                data=_strain_long,
-                y="y",
-                hue="strain",
-                hue_order=stack_strains,
-                weights="w",
-                multiple="fill",
-                common_norm=True,
-                cut=0,
-                palette={s: "#555555" for s in stack_strains},
-                ax=ax_hw,
-                fill=False,
-                linewidth=0.3,
-                alpha=0.5,
-                legend=False,
-                bw_adjust=0.5,
-                zorder=2,
-            )
-            sns.kdeplot(
-                data=_hw_long,
-                y="y",
-                hue="hw",
-                hue_order=_hw_str,
-                weights="w",
-                multiple="fill",
-                common_norm=True,
-                cut=0,
-                palette={s: "white" for s in _hw_str},
-                ax=ax_hw,
-                fill=False,
-                linewidth=1.2,
-                legend=False,
-                bw_adjust=0.5,
-                zorder=3,
             )
 
             for ax in (ax_strain, ax_hw):
@@ -1218,8 +1187,8 @@ def run_phylogeny_sweep(
                 POP_SIZE=POP_SIZE,
                 CONTACT_RATE=0.35,
                 RECOVERY_RATE=0.1,
-                WANING_RATE=0.02,
-                IMMUNE_STRENGTH=0.7,
+                WANING_RATE=0.01,
+                IMMUNE_STRENGTH=0.95,
                 SEED_COUNT=2,
                 IMMUNITY_FLOOR=0.05,
                 IMMUNITY_CEILING=1.0,
