@@ -328,7 +328,7 @@ pecking==0.2.1
     # via -r requirements.in
 pexpect==4.9.0
     # via ipython
-phyloframe==0.8.0
+phyloframe==0.8.1
     # via
     #   -r requirements.in
     #   hstrat
