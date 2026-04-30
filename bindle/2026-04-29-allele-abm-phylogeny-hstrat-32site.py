@@ -31,7 +31,7 @@ def import_pkg():
     import marimo as mo
     import matplotlib.colors as mcolors
     import matplotlib.pyplot as plt
-    from matplotlib.ticker import FuncFormatter
+    from matplotlib.ticker import FuncFormatter, MaxNLocator
     import numpy as np
     import pandas as pd
     from phyloframe import legacy as pfl
@@ -45,6 +45,7 @@ def import_pkg():
 
     return (
         FuncFormatter,
+        MaxNLocator,
         cp,
         draw_scatter_tree,
         dstream,
@@ -765,6 +766,7 @@ def delimit_phylogeny(mo):
 @app.cell
 def def_make_phylogeny_plot(
     FuncFormatter,
+    MaxNLocator,
     draw_scatter_tree,
     np,
     pathlib,
@@ -780,7 +782,6 @@ def def_make_phylogeny_plot(
         hw_df,
         phylogeny_df,
         max_tips: int = 10_000,
-        height_scale: float = 1.0,
         seed: int = 0,
     ) -> None:
         # Mirror the exact-tracking notebook's pruning steps so the figures
@@ -858,7 +859,7 @@ def def_make_phylogeny_plot(
             plt.subplots,
             nrows=1,
             ncols=3,
-            figsize=(12, height_scale * max(7, 4.5 + 0.4 * N_SITES)),
+            figsize=(8, 6),
             gridspec_kw={
                 "width_ratios": [1.4, 1.0, 1.0],
                 "wspace": 0.1,
@@ -875,22 +876,6 @@ def def_make_phylogeny_plot(
             teeplot_subdir=pathlib.Path(__file__).stem,
         ) as (fig, axes):
             ax_tree, ax_strain, ax_hw = axes
-
-            draw_scatter_tree(
-                pruned_df,
-                ax=ax_tree,
-                hue="hw_label",
-                scatter_kws=dict(
-                    legend=False,
-                    palette=hw_palette_map,
-                ),
-                tree_kws=dict(
-                    edge_color="gray",
-                    edge_linewidth=0.7,
-                    edge_zorder=1,
-                    margins=0.05,
-                ),
-            )
 
             sns.histplot(
                 data=plot_df,
@@ -940,16 +925,12 @@ def def_make_phylogeny_plot(
             ax_hw.set_xlim(0, 1)
 
             ax_tree.set_ylabel("step")
-            ax_tree.yaxis.set_major_formatter(
-                FuncFormatter(lambda v, _pos: f"{abs(int(round(-v)))}"),
-            )
             ax_tree.tick_params(left=True, labelleft=True)
             for ax in (ax_strain, ax_hw):
                 ax.tick_params(labelleft=False, left=False)
                 ax.xaxis.tick_top()
                 ax.xaxis.set_label_position("top")
 
-            sns.despine(ax=ax_tree, top=True, right=True, bottom=True)
             ax_tree.tick_params(bottom=False, labelbottom=False)
             sns.despine(ax=ax_strain, left=True, bottom=True, top=False)
             sns.despine(ax=ax_hw, left=True, bottom=True, top=False)
@@ -963,6 +944,29 @@ def def_make_phylogeny_plot(
                 bbox_to_anchor=(1.02, 0.5),
                 frameon=False,
                 handletextpad=0.4,
+            )
+
+            draw_scatter_tree(
+                pruned_df.reset_index(drop=True),
+                ax=ax_tree,
+                hue="hw_label",
+                scatter_kws=dict(
+                    legend=False,
+                    palette=hw_palette_map,
+                ),
+                tree_kws=dict(
+                    edge_color="gray",
+                    edge_linewidth=0.7,
+                    edge_zorder=1,
+                    ladderize=True,
+                ),
+            )
+            sns.despine(ax=ax_tree, top=True, right=True, bottom=True)
+            ax_tree.set_ylim(ax_hw.get_ylim())
+            ax_tree.set_aspect("auto")
+            ax_tree.yaxis.set_major_locator(MaxNLocator(integer=True))
+            ax_tree.yaxis.set_major_formatter(
+                FuncFormatter(lambda x, _: f"{abs(int(round(x)))}"),
             )
 
     return (make_phylogeny_plot,)
