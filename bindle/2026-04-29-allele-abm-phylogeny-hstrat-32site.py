@@ -41,15 +41,14 @@ def import_pkg():
     from tqdm.auto import tqdm
     from watermark import watermark
 
-    from pylib import rescale_stacked_kdeplot
+    from pylib import draw_scatter_tree
 
     return (
         FuncFormatter,
         cp,
+        draw_scatter_tree,
         dstream,
         hstrat,
-        ipx,
-        mcolors,
         mo,
         np,
         pd,
@@ -768,8 +767,7 @@ def delimit_phylogeny(mo):
 @app.cell
 def def_make_phylogeny_plot(
     FuncFormatter,
-    ipx,
-    mcolors,
+    draw_scatter_tree,
     np,
     pathlib,
     pd,
@@ -815,14 +813,14 @@ def def_make_phylogeny_plot(
                 lambda g: None if pd.isna(g) else bin(int(g)).count("1"),
             ),
         )
+        pruned_df = pruned_df.assign(
+            hw_label=pruned_df["hw"].map(
+                lambda w: None if pd.isna(w) else f"HW {int(w)}"
+            ),
+        )
 
         hw_values = list(range(N_SITES + 1))
         hw_palette = sns.color_palette("rocket_r", len(hw_values))
-
-        vertex_colors = [
-            "#cccccc" if pd.isna(w) else mcolors.to_hex(hw_palette[int(w)])
-            for w in pruned_df["hw"]
-        ]
 
         # `hw_df` is long form: one row per (Step, hw) with `count`
         # giving the per-step prevalence of infections at that Hamming
@@ -856,9 +854,7 @@ def def_make_phylogeny_plot(
                 label=label,
             )
 
-        hw_palette_map = {
-            f"HW {w}": hw_palette[w] for w in present_hw
-        }
+        hw_palette_map = {f"HW {w}": hw_palette[w] for w in present_hw}
 
         with tp.teed(
             plt.subplots,
@@ -882,19 +878,20 @@ def def_make_phylogeny_plot(
         ) as (fig, axes):
             ax_tree, ax_strain, ax_hw = axes
 
-            ipx.tree(
-                pfl.alifestd_to_iplotx_pandas(pruned_df),
+            draw_scatter_tree(
+                pruned_df,
                 ax=ax_tree,
-                layout="vertical",
-                vertex_color=vertex_colors,
-                vertex_alpha=0.5,
-                vertex_size=5,
-                vertex_zorder=3,
-                edge_color="gray",
-                edge_linewidth=0.7,
-                edge_zorder=1,
-                margins=0.05,
-                strip_axes=False,
+                hue="hw_label",
+                scatter_kws=dict(
+                    legend=False,
+                    palette=hw_palette_map,
+                ),
+                tree_kws=dict(
+                    edge_color="gray",
+                    edge_linewidth=0.7,
+                    edge_zorder=1,
+                    margins=0.05,
+                ),
             )
 
             sns.histplot(
