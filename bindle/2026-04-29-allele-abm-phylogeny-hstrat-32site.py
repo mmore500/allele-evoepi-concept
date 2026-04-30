@@ -302,7 +302,8 @@ def def_simulate(
                 pathogen_genomes: xp.ndarray,
             ) -> xp.ndarray:
                 pathogen_bits = (
-                    pathogen_genomes[:, None] >> xp.arange(N_SITES, dtype=xp.uint8)
+                    pathogen_genomes[:, None]
+                    >> xp.arange(N_SITES, dtype=xp.uint8)
                 ) & 1
 
                 imm_reshaped = xp.reshape(host_immunities, (-1, N_SITES, 2))
@@ -1297,7 +1298,9 @@ def run_phylogeny_sweep(
     records_df_all.to_parquet(records_path, index=False)
     phylo_df_all.to_parquet(phylo_path, index=False)
     print(f"wrote trajectory parquet ({len(traj_df_all)} rows): {traj_path}")
-    print(f"wrote records parquet ({len(records_df_all)} rows): {records_path}")
+    print(
+        f"wrote records parquet ({len(records_df_all)} rows): {records_path}"
+    )
     print(f"wrote phylogeny parquet ({len(phylo_df_all)} rows): {phylo_path}")
     return
 
