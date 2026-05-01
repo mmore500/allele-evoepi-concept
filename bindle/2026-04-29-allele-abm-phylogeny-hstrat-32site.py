@@ -970,7 +970,13 @@ def def_make_strain_graph_plot(ig, iplotx, np, pathlib, plt, sns, tp):
 
             for ax, (n, edges_dict) in zip(axes, snapshots):
                 edges = list(edges_dict.keys())
-                widths = [edges_dict[e] for e in edges]
+                # 1-hop edges thickest, with progressively thinner widths
+                # for higher-n edges; n>1 edges drawn dashed to distinguish
+                # them from direct mutational neighbors.
+                widths = [3.0 / edges_dict[e] for e in edges]
+                linestyles = [
+                    "-" if edges_dict[e] == 1 else "--" for e in edges
+                ]
 
                 g_plot = ig.Graph(n=n_strains)
                 if edges:
@@ -983,6 +989,7 @@ def def_make_strain_graph_plot(ig, iplotx, np, pathlib, plt, sns, tp):
                     vertex_edgecolor="black",
                     vertex_size=sizes.tolist(),
                     edge_linewidth=widths if widths else 1.0,
+                    edge_linestyle=linestyles if linestyles else "-",
                     edge_color="gray",
                     ax=ax,
                     show=False,
