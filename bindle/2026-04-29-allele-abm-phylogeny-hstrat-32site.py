@@ -88,6 +88,7 @@ def configure_args(mo):
     # current sweep settings: POP_SIZE=200_000 hosts and N_STEPS=100 steps.
     _args = mo.cli_args()
     POP_SIZE = int(_args.get("pop-size") or 200_000)
+    POW = float(_args.get("pow") or 1.0)
     N_STEPS = int(_args.get("n-steps") or 100)
     N_REPLICATES = int(_args.get("n-replicates") or 1)
     ENGINE = str(_args.get("engine") or "numpy").lower()
@@ -187,6 +188,7 @@ def def_simulate(
         DSTREAM_S: int = 64,
         DSTREAM_ALGO=None,
         N_SAMPLE: int = 2000,
+        pow: float = 1.0,
     ) -> Union[
         Tuple[pd.DataFrame, pd.DataFrame],
         Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame],
@@ -293,20 +295,21 @@ def def_simulate(
                 pathogen_bits[:, :, None] == xp.array([0, 1])
             ).reshape(-1, 2 * N_SITES)
 
-            # active_susc = xp.where(
-            #     pathogen_alleles, host_susceptibilities, 1.0
-            # )
-            # res = xp.prod(active_susc, axis=1)
             active_susc = xp.where(
-                pathogen_alleles, host_susceptibilities, np.nan
+                pathogen_alleles, host_susceptibilities, 1.0
             )
-            res = (
-                xp.nanmean(active_susc, axis=1)
-                * xp.nanmax(active_susc, axis=1)
-                * xp.nanmin(host_susceptibilities, axis=1)
-            )
+            res = xp.prod(active_susc, axis=1)
+            # active_susc = xp.where(
+            #     pathogen_alleles, host_susceptibilities, np.nan
+            # )
+            # res = xp.nanmean(active_susc, axis=1)
+            # res = (
+            #     # xp.nanmean(active_susc, axis=1)
+            #     xp.nanmin(active_susc, axis=1)
+            #     * xp.nanmax(active_susc, axis=1)
+            # )
             assert res.shape == (POP_SIZE,)
-            return res
+            return xp.pow(res, pow)
 
         if MUTATION_RATE.size == 1:
 
@@ -769,6 +772,7 @@ def def_make_phylogeny_plot(
         phylogeny_df,
         max_tips: int = 10_000,
         seed: int = 0,
+        teeplot_outattrs: dict = {},
     ) -> None:
         # Mirror the exact-tracking notebook's pruning steps so the figures
         # are visually comparable: uniform tip downsampling + unifurcation
@@ -851,13 +855,7 @@ def def_make_phylogeny_plot(
                 "wspace": 0.1,
             },
             sharey=True,
-            teeplot_outattrs={
-                "what": "phylogeny",
-                "n_sites": N_SITES,
-                "n_steps": int(phylo_df["Step"].max()) + 1,
-                "replicate": seed,
-                "method": "hstrat-surface",
-            },
+            teeplot_outattrs=teeplot_outattrs,
             teeplot_show=True,
             teeplot_subdir=pathlib.Path(__file__).stem,
         ) as (fig, axes):
@@ -981,6 +979,7 @@ def run_phylogeny_sweep(
     # `surface_unpack_reconstruct` (each row is ~1 KB of hex). Use the
     # canonical 64-bit hybrid algo, `dstream.hybrid_0_steady_1_tilted_2_algo`.
     PHYLO_MUTATION_RATE = 1e-5
+    POW_ = POW
 
     nbname = pathlib.Path(__file__).stem
     out_dir = pathlib.Path("outdata") / nbname
@@ -1013,6 +1012,7 @@ def run_phylogeny_sweep(
                 seed=_seed,
                 track_phylogeny=True,
                 N_SAMPLE=200,
+                pow=POW_,
             )
             print(f"  snapshot rows: {len(_records_df)}")
 
@@ -1027,6 +1027,7 @@ def run_phylogeny_sweep(
                 "pop_size": POP_SIZE,
                 "n_steps": N_STEPS,
                 "engine": ENGINE,
+                "pow": POW_,
             }
             traj_chunks.append(_phylo_df.assign(**_params))
             hw_chunks.append(_hw_df.assign(**_params))
@@ -1061,6 +1062,13 @@ def run_phylogeny_sweep(
                 _hw_df,
                 _phylogeny_df,
                 seed=_seed,
+                teeplot_outattrs={
+                    "n_sites": PHYLO_N_SITES,
+                    "n_steps": int(_phylo_df["Step"].max()) + 1,
+                    "replicate": _seed,
+                    "method": "hstrat-surface",
+                    "pow": POW_,
+                },
             )
             del _phylo_df, _hw_df, _phylogeny_df
             gc.collect()
