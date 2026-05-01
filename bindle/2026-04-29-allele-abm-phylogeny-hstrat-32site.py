@@ -633,8 +633,11 @@ def def_simulate(
             if n_sample < n_inf
             else infected_idx
         )
-        sampled_markers = np.asarray(pathogen_markers[sampled])
-        sampled_genomes = np.asarray(pathogen_genomes[sampled])
+        # `cupy` arrays disallow implicit `np.asarray` conversion; copy to
+        # host with `.get()` first when running on GPU.
+        _to_np = (lambda a: np.asarray(a)) if xp is np else (lambda a: a.get())
+        sampled_markers = _to_np(pathogen_markers[sampled])
+        sampled_genomes = _to_np(pathogen_genomes[sampled])
         sampled_steps = np.full(n_sample, N_STEPS, dtype=np.uint32)
         sampled_taxon_ids = np.arange(n_sample, dtype=np.int64)
 
