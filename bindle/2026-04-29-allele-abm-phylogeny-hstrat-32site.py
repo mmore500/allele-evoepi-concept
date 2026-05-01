@@ -957,7 +957,7 @@ def run_phylogeny_sweep(
                 del _phylo_df, _hw_df, _records_df
                 gc.collect()
                 continue
-            
+
             print(f"  extant rows: {int(_records_df['extant'].sum())}")
             _phylogeny_df = reconstruct_phylogeny(_records_df)
             del _records_df
