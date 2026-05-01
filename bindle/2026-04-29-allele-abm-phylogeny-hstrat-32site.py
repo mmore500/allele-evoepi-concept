@@ -34,6 +34,8 @@ def import_pkg():
 
     import downstream.dstream as dstream
     import hstrat
+    import igraph as ig
+    import iplotx
     import marimo as mo
     import matplotlib.pyplot as plt
     from matplotlib.ticker import FuncFormatter, MaxNLocator
@@ -55,6 +57,8 @@ def import_pkg():
         draw_scatter_tree,
         dstream,
         hstrat,
+        ig,
+        iplotx,
         mo,
         np,
         pd,
@@ -873,6 +877,153 @@ def def_make_phylogeny_plot(
 
 
 @app.cell
+def def_make_strain_graph_plot(ig, iplotx, np, pathlib, plt, sns, tp):
+    def make_strain_graph_plot(
+        N_SITES: int,
+        records_df,
+        max_n: int = 4,
+        palette: str = "rocket_r",
+        teeplot_outattrs: dict = {},
+    ) -> None:
+        """Plot final-step strains as undirected graphs at thresholds n=1..max_n.
+
+        Nodes are unique strains (sized by population copies, colored by
+        Hamming weight, 80% alpha). Edges connect strains within Hamming
+        distance ``n``. For ``n > 1`` only edges that are not implicitly
+        present via a 2-hop path through previously-added edges are drawn,
+        with line thickness encoding the threshold ``n`` at which the edge
+        was introduced.
+        """
+        extant = records_df[records_df["extant"]].copy()
+        if len(extant) == 0:
+            print("  (no extant records --- skipping strain graph plot)")
+            return
+
+        genomes = extant["genome"].astype("int64").to_numpy()
+        strains, counts = np.unique(genomes, return_counts=True)
+        n_strains = int(strains.size)
+        if n_strains < 2:
+            print(
+                f"  (only {n_strains} strain --- skipping strain graph plot)"
+            )
+            return
+
+        hamming_weights = np.array(
+            [bin(int(s)).count("1") for s in strains], dtype=int
+        )
+
+        xor = strains[:, None] ^ strains[None, :]
+        dists = np.zeros_like(xor, dtype=np.int32)
+        tmp = xor.copy()
+        while tmp.any():
+            dists += (tmp & 1).astype(np.int32)
+            tmp >>= 1
+
+        cumulative = {}  # (i, j) with i < j -> threshold n at which added
+        adjacency = [set() for _ in range(n_strains)]
+        snapshots = []
+        for n in range(1, max_n + 1):
+            iu, ju = np.where(np.triu(dists == n, k=1))
+            for i, j in zip(iu.tolist(), ju.tolist()):
+                if n > 1 and adjacency[i] & adjacency[j]:
+                    continue
+                cumulative[(i, j)] = n
+                adjacency[i].add(j)
+                adjacency[j].add(i)
+            snapshots.append((n, dict(cumulative)))
+
+        palette_colors = sns.color_palette(palette, N_SITES + 1)
+        node_facecolors = [
+            (*palette_colors[int(hw)], 0.8) for hw in hamming_weights
+        ]
+
+        max_count = int(counts.max())
+        sizes = 4.0 + 18.0 * np.sqrt(counts / max_count)
+
+        # Layout: kamada_kawai on the densest graph (max_n) so vertex
+        # positions are stable across subplots.
+        ref_graph = ig.Graph(n=n_strains)
+        ref_graph.add_edges(list(cumulative.keys()))
+        if ref_graph.ecount() > 0:
+            try:
+                layout = ref_graph.layout_kamada_kawai()
+            except Exception:
+                layout = ref_graph.layout_fruchterman_reingold()
+        else:
+            layout = ref_graph.layout_circle()
+        layout_coords = [tuple(c) for c in layout.coords]
+
+        with tp.teed(
+            plt.subplots,
+            nrows=1,
+            ncols=max_n,
+            figsize=(4.5 * max_n, 4.5),
+            teeplot_outattrs=teeplot_outattrs,
+            teeplot_show=True,
+            teeplot_subdir=pathlib.Path(__file__).stem,
+        ) as (fig, axes):
+            if max_n == 1:
+                axes = [axes]
+
+            for ax, (n, edges_dict) in zip(axes, snapshots):
+                edges = list(edges_dict.keys())
+                widths = [edges_dict[e] for e in edges]
+
+                g_plot = ig.Graph(n=n_strains)
+                if edges:
+                    g_plot.add_edges(edges)
+
+                iplotx.network(
+                    g_plot,
+                    layout=layout_coords,
+                    vertex_facecolor=node_facecolors,
+                    vertex_edgecolor="black",
+                    vertex_size=sizes.tolist(),
+                    edge_linewidth=widths if widths else 1.0,
+                    edge_color="gray",
+                    ax=ax,
+                    show=False,
+                )
+                ax.set_title(f"n = {n}")
+                ax.set_aspect("equal")
+
+            present_hw = sorted(set(int(w) for w in hamming_weights))
+            if len(present_hw) > 6:
+                idx = np.unique(
+                    np.linspace(0, len(present_hw) - 1, 6)
+                    .round()
+                    .astype(int)
+                ).tolist()
+                legend_hw = [present_hw[i] for i in idx]
+            else:
+                legend_hw = present_hw
+
+            handles = [
+                plt.Line2D(
+                    [0],
+                    [0],
+                    marker="o",
+                    color="w",
+                    markerfacecolor=(*palette_colors[w], 0.8),
+                    markeredgecolor="black",
+                    markersize=10,
+                    label=f"HW {w}",
+                )
+                for w in legend_hw
+            ]
+            axes[-1].legend(
+                handles=handles,
+                title="Hamming weight",
+                loc="center left",
+                bbox_to_anchor=(1.02, 0.5),
+                frameon=False,
+                handletextpad=0.4,
+            )
+
+    return (make_strain_graph_plot,)
+
+
+@app.cell
 def run_phylogeny_sweep(
     ENGINE,
     N_REPLICATES,
@@ -882,6 +1033,7 @@ def run_phylogeny_sweep(
     POW,
     gc,
     make_phylogeny_plot,
+    make_strain_graph_plot,
     pathlib,
     pd,
     reconstruct_phylogeny,
@@ -961,6 +1113,24 @@ def run_phylogeny_sweep(
                 continue
 
             print(f"  extant rows: {int(_records_df['extant'].sum())}")
+            for palette in "rocket_r", "tab20", "tab10":
+                if SKIP_PLOTTING:
+                    print("  (SKIP_PLOTTING=True — skipping strain graph)")
+                else:
+                    make_strain_graph_plot(
+                        PHYLO_N_SITES,
+                        _records_df,
+                        max_n=4,
+                        palette=palette,
+                        teeplot_outattrs={
+                            "a": "strain-graph",
+                            "n_sites": PHYLO_N_SITES,
+                            "n_steps": int(_phylo_df["Step"].max()) + 1,
+                            "replicate": _seed,
+                            "palette": palette,
+                            "pow": POW_,
+                        },
+                    )
             _phylogeny_df = reconstruct_phylogeny(_records_df)
             del _records_df
             gc.collect()
