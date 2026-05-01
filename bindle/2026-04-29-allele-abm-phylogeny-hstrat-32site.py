@@ -736,7 +736,14 @@ def def_simulate(
                 site = DSTREAM_ALGO.assign_storage_site(S, T)
                 if site is not None:
                     buf[site] = np.uint64(override(T))
-            T_bytes_v = np.uint32(validator_n_gen).astype(">u4").tobytes()
+            # NB: `np.uint32(...).astype('>u4')` on a Python scalar skips
+            # the byte swap (numpy quirk on 0-D scalars); wrap in an array
+            # first so the big-endian conversion actually happens.
+            T_bytes_v = (
+                np.array([validator_n_gen], dtype=np.uint32)
+                .astype(">u4")
+                .tobytes()
+            )
             buf_bytes = buf.astype(big_diff_dtype).tobytes()
             validator_rows.append(
                 {
