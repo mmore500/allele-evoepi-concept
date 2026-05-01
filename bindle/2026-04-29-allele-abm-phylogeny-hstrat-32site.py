@@ -102,11 +102,13 @@ def configure_args(mo):
         raise ValueError(
             f"engine must be 'numpy' or 'cupy', got {ENGINE!r}",
         )
+    SKIP_PLOTTING = bool(_args.get("skip-plotting") or False)
     print(
         f"args: POP_SIZE={POP_SIZE} N_STEPS={N_STEPS} "
-        f"N_REPLICATES={N_REPLICATES} ENGINE={ENGINE}",
+        f"N_REPLICATES={N_REPLICATES} ENGINE={ENGINE} "
+        f"SKIP_PLOTTING={SKIP_PLOTTING}",
     )
-    return ENGINE, N_REPLICATES, N_STEPS, POP_SIZE
+    return ENGINE, N_REPLICATES, N_STEPS, POP_SIZE, SKIP_PLOTTING
 
 
 @app.cell
@@ -980,6 +982,7 @@ def run_phylogeny_sweep(
     N_REPLICATES,
     N_STEPS,
     POP_SIZE,
+    SKIP_PLOTTING,
     gc,
     make_phylogeny_plot,
     pathlib,
@@ -1071,13 +1074,16 @@ def run_phylogeny_sweep(
 
             phylo_chunks.append(_phylogeny_df.assign(**_params))
 
-            make_phylogeny_plot(
-                PHYLO_N_SITES,
-                _phylo_df,
-                _hw_df,
-                _phylogeny_df,
-                seed=_seed,
-            )
+            if SKIP_PLOTTING:
+                print("  (SKIP_PLOTTING=True — skipping plot)")
+            else:
+                make_phylogeny_plot(
+                    PHYLO_N_SITES,
+                    _phylo_df,
+                    _hw_df,
+                    _phylogeny_df,
+                    seed=_seed,
+                )
             del _phylo_df, _hw_df, _phylogeny_df
             gc.collect()
 
