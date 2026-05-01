@@ -1011,6 +1011,16 @@ def run_phylogeny_sweep(
     out_dir = pathlib.Path("outdata") / nbname
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    def _save_replicate(kind: str, uid: str, df) -> None:
+        # One folder per datatype, then a uid-named subfolder per replicate.
+        # Filenames stay alife-style so downstream readers don't need a new
+        # convention.
+        rep_dir = out_dir / kind / uid
+        rep_dir.mkdir(parents=True, exist_ok=True)
+        rep_path = rep_dir / f"a={kind}+what={nbname}+ext=.pqt"
+        df.to_parquet(rep_path, index=False)
+        print(f"  wrote {kind} parquet ({len(df)} rows): {rep_path}")
+
     traj_chunks = []
     hw_chunks = []
     records_chunks = []
@@ -1053,15 +1063,21 @@ def run_phylogeny_sweep(
                 "n_steps": N_STEPS,
                 "engine": ENGINE,
             }
-            traj_chunks.append(_phylo_df.assign(**_params))
-            hw_chunks.append(_hw_df.assign(**_params))
+            _traj_stamped = _phylo_df.assign(**_params)
+            _hw_stamped = _hw_df.assign(**_params)
+            traj_chunks.append(_traj_stamped)
+            hw_chunks.append(_hw_stamped)
+            _save_replicate("traj", replicate_uid, _traj_stamped)
+            _save_replicate("hw", replicate_uid, _hw_stamped)
             # Save the *raw* surface records (the input to
             # `surface_unpack_reconstruct`) so reconstruction can be re-run
             # downstream without re-simulating. Empty records frames are
             # appended too — they preserve the (replicate_uid, params)
             # bookkeeping for replicates whose lineage died before
             # `dstream_S` deposits accumulated.
-            records_chunks.append(_records_df.assign(**_params))
+            _records_stamped = _records_df.assign(**_params)
+            records_chunks.append(_records_stamped)
+            _save_replicate("records", replicate_uid, _records_stamped)
 
             if len(_records_df) == 0:
                 print("  (no infected hosts past S=64 — skipping plot)")
@@ -1078,7 +1094,9 @@ def run_phylogeny_sweep(
             print(f"  reconstructed: {len(_phylogeny_df)} nodes")
             print(f"  extant tips: {int(_phylogeny_df['extant'].sum())}")
 
-            phylo_chunks.append(_phylogeny_df.assign(**_params))
+            _phylo_stamped = _phylogeny_df.assign(**_params)
+            phylo_chunks.append(_phylo_stamped)
+            _save_replicate("phylo", replicate_uid, _phylo_stamped)
 
             if SKIP_PLOTTING:
                 print("  (SKIP_PLOTTING=True — skipping plot)")
