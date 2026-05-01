@@ -1027,7 +1027,7 @@ def run_phylogeny_sweep(
     phylo_chunks = []
 
     for _seed in range(1, N_REPLICATES + 1):
-        for PHYLO_N_SITES in (16, 32, 64):
+        for PHYLO_N_SITES in (2, 3, 4, 8, 16):
             replicate_uid = uuid.uuid4().hex
             print(
                 f"=== seed={_seed} N_SITES={PHYLO_N_SITES} "
