@@ -34,6 +34,8 @@ def import_pkg():
 
     import downstream.dstream as dstream
     import hstrat
+    import igraph as ig
+    import iplotx
     import marimo as mo
     import matplotlib.pyplot as plt
     from matplotlib.ticker import FuncFormatter, MaxNLocator
@@ -55,6 +57,8 @@ def import_pkg():
         draw_scatter_tree,
         dstream,
         hstrat,
+        ig,
+        iplotx,
         mo,
         np,
         pd,
@@ -239,14 +243,17 @@ def def_simulate(
                 shape=POP_SIZE, fill_value=0, dtype=xp.uint8
             )
             pathogen_markers = xp.random.randint(
-                low=0, high=2**63, size=POP_SIZE, dtype=xp.int64,
+                low=0,
+                high=2**63,
+                size=POP_SIZE,
+                dtype=xp.int64,
             ).astype(xp.uint64)
-            pathogen_markers |= (
-                xp.random.randint(
-                    low=0, high=2, size=POP_SIZE, dtype=xp.uint64,
-                )
-                << xp.uint64(63)
-            )
+            pathogen_markers |= xp.random.randint(
+                low=0,
+                high=2,
+                size=POP_SIZE,
+                dtype=xp.uint64,
+            ) << xp.uint64(63)
             return (
                 host_statuses,
                 pathogen_genomes,
@@ -290,6 +297,7 @@ def def_simulate(
             return xp.pow(res, pow)
 
         if MUTATION_RATE.size == 1:
+
             def calc_mutation_probabilities(
                 host_immunities: xp.ndarray,
                 pathogen_genomes: xp.ndarray,
@@ -321,7 +329,9 @@ def def_simulate(
                 return (MUTATION_RATE / (b_values - 1.0)) * (
                     xp.exp((b_values - 1.0) * within_host_t) - 1.0
                 )
+
         else:
+
             def calc_mutation_probabilities(
                 host_immunities: xp.ndarray,
                 pathogen_genomes: xp.ndarray,
@@ -434,9 +444,12 @@ def def_simulate(
             if site is None:
                 return pathogen_markers
             new_bits = xp.random.randint(
-                0, 2, size=POP_SIZE, dtype=xp.uint64,
+                0,
+                2,
+                size=POP_SIZE,
+                dtype=xp.uint64,
             )
-            pathogen_markers ^= (new_bits << np.uint64(63 - site))
+            pathogen_markers ^= new_bits << np.uint64(63 - site)
             return pathogen_markers
 
         def update_simulation(
@@ -873,6 +886,172 @@ def def_make_phylogeny_plot(
 
 
 @app.cell
+def def_make_strain_graph_plot(ig, iplotx, np, pathlib, plt, sns, tp):
+    def make_strain_graph_plot(
+        N_SITES: int,
+        records_df,
+        max_n: int = 4,
+        palette: str = "rocket_r",
+        teeplot_outattrs: dict = {},
+    ) -> None:
+        """Plot final-step strains as undirected graphs at thresholds n=1..max_n.
+
+        Nodes are unique strains (sized by population copies, colored by
+        Hamming weight, 80% alpha). Edges connect strains within Hamming
+        distance ``n``. For ``n > 1`` only edges that are not implicitly
+        present via a 2-hop path through previously-added edges are drawn,
+        with line thickness encoding the threshold ``n`` at which the edge
+        was introduced.
+        """
+        extant = records_df[records_df["extant"]].copy()
+        if len(extant) == 0:
+            print("  (no extant records --- skipping strain graph plot)")
+            return
+
+        genomes = extant["genome"].astype("int64").to_numpy()
+        strains, counts = np.unique(genomes, return_counts=True)
+        n_strains = int(strains.size)
+        if n_strains < 2:
+            print(
+                f"  (only {n_strains} strain --- skipping strain graph plot)"
+            )
+            return
+
+        hamming_weights = np.array(
+            [bin(int(s)).count("1") for s in strains], dtype=int
+        )
+
+        xor = strains[:, None] ^ strains[None, :]
+        dists = np.zeros_like(xor, dtype=np.int32)
+        tmp = xor.copy()
+        while tmp.any():
+            dists += (tmp & 1).astype(np.int32)
+            tmp >>= 1
+
+        cumulative = {}  # (i, j) with i < j -> threshold n at which added
+        adjacency = [set() for _ in range(n_strains)]
+        snapshots = []
+        for n in range(1, max_n + 1):
+            iu, ju = np.where(np.triu(dists == n, k=1))
+            for i, j in zip(iu.tolist(), ju.tolist()):
+                if n > 1 and adjacency[i] & adjacency[j]:
+                    continue
+                cumulative[(i, j)] = n
+                adjacency[i].add(j)
+                adjacency[j].add(i)
+            snapshots.append((n, dict(cumulative)))
+
+        palette_colors = sns.color_palette(palette, N_SITES + 1)
+        node_facecolors = [
+            (*palette_colors[int(hw)], 0.8) for hw in hamming_weights
+        ]
+
+        max_count = int(counts.max())
+        sizes = 4.0 + 18.0 * np.sqrt(counts / max_count)
+
+        # Label only the dominant strains: those carrying more than 10% of
+        # the sampled population, annotated with their Hamming weight.
+        total = int(counts.sum())
+        vertex_labels = [
+            str(int(hamming_weights[i])) if counts[i] > 0.10 * total else ""
+            for i in range(n_strains)
+        ]
+
+        # Layout: kamada_kawai on the densest graph (max_n) so vertex
+        # positions are stable across subplots.
+        ref_graph = ig.Graph(n=n_strains)
+        ref_graph.add_edges(list(cumulative.keys()))
+        if ref_graph.ecount() > 0:
+            try:
+                layout = ref_graph.layout_kamada_kawai()
+            except Exception:
+                layout = ref_graph.layout_fruchterman_reingold()
+        else:
+            layout = ref_graph.layout_circle()
+        layout_coords = [tuple(c) for c in layout.coords]
+
+        with tp.teed(
+            plt.subplots,
+            nrows=1,
+            ncols=max_n,
+            figsize=(4.5 * max_n, 4.5),
+            teeplot_outattrs=teeplot_outattrs,
+            teeplot_show=True,
+            teeplot_subdir=pathlib.Path(__file__).stem,
+        ) as (fig, axes):
+            if max_n == 1:
+                axes = [axes]
+
+            for ax, (n, edges_dict) in zip(axes, snapshots):
+                edges = list(edges_dict.keys())
+                # 1-hop edges thickest, with progressively thinner widths
+                # for higher-n edges; n>1 edges drawn dashed to distinguish
+                # them from direct mutational neighbors.
+                widths = [3.0 / edges_dict[e] for e in edges]
+                linestyles = [
+                    "-" if edges_dict[e] == 1 else "--" for e in edges
+                ]
+
+                g_plot = ig.Graph(n=n_strains)
+                if edges:
+                    g_plot.add_edges(edges)
+
+                iplotx.network(
+                    g_plot,
+                    layout=layout_coords,
+                    vertex_facecolor=node_facecolors,
+                    vertex_edgecolor="black",
+                    vertex_size=sizes.tolist(),
+                    vertex_labels=vertex_labels,
+                    vertex_label_color="black",
+                    vertex_label_size=8,
+                    edge_linewidth=widths if widths else 1.0,
+                    edge_linestyle=linestyles if linestyles else "-",
+                    edge_color="gray",
+                    ax=ax,
+                    show=False,
+                )
+                ax.set_title(f"n = {n}")
+                ax.set_aspect("equal")
+
+            # Match make_phylogeny_plot's legend: span the same HW limits
+            # (min/max of present Hamming weights), with up to 4
+            # evenly-spaced entries.
+            present_hw = sorted(int(w) for w in set(hamming_weights.tolist()))
+            if len(present_hw) > 4:
+                idx = np.unique(
+                    np.linspace(0, len(present_hw) - 1, 4).round().astype(int)
+                ).tolist()
+                legend_hw = [present_hw[i] for i in idx]
+            else:
+                legend_hw = present_hw
+
+            handles = [
+                plt.Line2D(
+                    [0],
+                    [0],
+                    marker="o",
+                    color="w",
+                    markerfacecolor=(*palette_colors[w], 0.8),
+                    markeredgecolor="black",
+                    markersize=10,
+                    label=f"HW {w}",
+                )
+                for w in legend_hw
+            ]
+            axes[-1].legend(
+                handles=handles,
+                title="Hamming weight",
+                loc="center left",
+                bbox_to_anchor=(1.02, 0.5),
+                frameon=False,
+                handletextpad=0.4,
+            )
+
+    return (make_strain_graph_plot,)
+
+
+@app.cell
 def run_phylogeny_sweep(
     ENGINE,
     N_REPLICATES,
@@ -882,6 +1061,7 @@ def run_phylogeny_sweep(
     POW,
     gc,
     make_phylogeny_plot,
+    make_strain_graph_plot,
     pathlib,
     pd,
     reconstruct_phylogeny,
@@ -906,7 +1086,6 @@ def run_phylogeny_sweep(
     hw_chunks = []
     records_chunks = []
     phylo_chunks = []
-
 
     for _seed in range(1, N_REPLICATES + 1):
         for PHYLO_N_SITES in (2, 3, 4, 8, 16):
@@ -961,6 +1140,24 @@ def run_phylogeny_sweep(
                 continue
 
             print(f"  extant rows: {int(_records_df['extant'].sum())}")
+            for palette in "rocket_r", "tab20", "tab10":
+                if SKIP_PLOTTING:
+                    print("  (SKIP_PLOTTING=True — skipping strain graph)")
+                else:
+                    make_strain_graph_plot(
+                        PHYLO_N_SITES,
+                        _records_df,
+                        max_n=4,
+                        palette=palette,
+                        teeplot_outattrs={
+                            "a": "strain-graph",
+                            "n_sites": PHYLO_N_SITES,
+                            "n_steps": int(_phylo_df["Step"].max()) + 1,
+                            "replicate": _seed,
+                            "palette": palette,
+                            "pow": POW_,
+                        },
+                    )
             _phylogeny_df = reconstruct_phylogeny(_records_df)
             del _records_df
             gc.collect()
