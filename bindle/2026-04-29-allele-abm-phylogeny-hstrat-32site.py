@@ -422,14 +422,9 @@ def def_simulate(
             pathogen_genomes[new_infections] = pathogen_genomes[contacts][
                 new_infections
             ]
-            if track_phylogeny:
-                # Recipient inherits donor's surface state — vectorized
-                # analogue of `HereditaryStratigraphicSurface.CloneDescendant`
-                # without the post-clone deposit (the deposit happens later
-                # in the step for all infected hosts uniformly).
-                pathogen_markers[new_infections] = pathogen_markers[
-                    contacts[new_infections]
-                ]
+            pathogen_markers[new_infections] = pathogen_markers[contacts][
+                new_infections
+            ]
 
             return host_statuses, pathogen_genomes, pathogen_markers
 
@@ -462,7 +457,6 @@ def def_simulate(
             return pathogen_genomes
 
         def deposit_strata(
-            host_statuses: xp.ndarray,
             pathogen_markers: xp.ndarray,
             t: int,
         ) -> xp.ndarray:
@@ -481,14 +475,10 @@ def def_simulate(
             site = DSTREAM_ALGO.assign_storage_site(DSTREAM_S, t + DSTREAM_S)
             if site is None:
                 return pathogen_markers
-            infected_idx = xp.where(host_statuses > 0)[0]
-            n_inf = int(infected_idx.size)
-            if n_inf == 0:
-                return pathogen_markers
             new_bits = xp.random.randint(
-                0, 2, size=n_inf, dtype=xp.uint64,
+                0, 2, size=POP_SIZE, dtype=xp.uint64,
             )
-            pathogen_markers[infected_idx] ^= new_bits << xp.uint64(site)
+            pathogen_markers ^= (new_bits << xp.uint64(site))
             return pathogen_markers
 
         def update_simulation(
@@ -514,14 +504,7 @@ def def_simulate(
                 host_statuses, host_immunities, pathogen_genomes
             )
             host_immunities = update_waning(host_immunities)
-            if track_phylogeny:
-                # Stratum deposit comes after recoveries so just-recovered
-                # hosts (whose `host_statuses` is now 0) don't get a fresh
-                # stratum — their surface state stops evolving once the
-                # lineage dies out, which is the correct semantics.
-                pathogen_markers = deposit_strata(
-                    host_statuses, pathogen_markers, t
-                )
+            pathogen_markers = deposit_strata(pathogen_markers, t)
 
             return (
                 host_statuses,
@@ -721,19 +704,14 @@ def def_reconstruct_phylogeny(gc, hstrat, pd, pl):
         step at which each (estimated) lineage diverged.
         """
         in_df = pl.from_pandas(records_df)
-        recon = hstrat.dataframe.surface_unpack_reconstruct(in_df)
-        # The unpack frame is the largest intermediate (one row per
-        # retained stratum across all sampled tips); free it before
-        # `surface_postprocess_trie` allocates its own internal buffers.
-        post = hstrat.dataframe.surface_postprocess_trie(
-            recon,
+        post = hstrat.dataframe.surface_build_tree(
+            in_df,
             trie_postprocessor=(
                 hstrat.phylogenetic_inference.AssignOriginTimeNodeRankTriePostprocessor(
                     t0="dstream_S",
                 )
             ),
         ).to_pandas()
-        del recon, in_df
         gc.collect()
         # phyloframe's CSR builder fast path uses
         # `np.full(n, -1, dtype=ancestor_ids.dtype)`, which OverflowErrors
@@ -802,7 +780,7 @@ def def_make_phylogeny_plot(
                 n_downsample=max_tips,
                 seed=0,
             )
-            .pipe(pfl.alifestd_add_global_root)
+            .pipe(pfl.alifestd_add_global_root, root_attrs={"origin_time": 0})
             .pipe(pfl.alifestd_collapse_unifurcations)
             .pipe(pfl.alifestd_try_add_ancestor_list_col)
             .pipe(pfl.alifestd_ladderize_asexual)
@@ -1061,7 +1039,7 @@ def run_phylogeny_sweep(
             records_chunks.append(_records_df.assign(**_params))
 
             if len(_records_df) == 0:
-                print("  (no infected hosts past S=64 — skipping plot)")
+                print("  (no infected hosts --- skipping plot)")
                 del _phylo_df, _hw_df, _records_df
                 gc.collect()
                 continue
