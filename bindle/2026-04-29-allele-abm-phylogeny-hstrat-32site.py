@@ -20,6 +20,13 @@ def import_pkg():
     try:
         import cupy as cp
     except ImportError:
+        import warnings
+
+        warnings.warn(
+            "cupy import failed; falling back to numpy "
+            "(GPU engine unavailable)",
+            stacklevel=2,
+        )
         import numpy as cp
 
     # workaround: iplotx 1.7.x uses importlib.metadata without importing it
@@ -1011,7 +1018,7 @@ def run_phylogeny_sweep(
                 MUTATION_RATE=PHYLO_MUTATION_RATE,
                 N_SITES=PHYLO_N_SITES,
                 N_STEPS=N_STEPS,
-                POP_SIZE=50_000,
+                POP_SIZE=POP_SIZE,
                 CONTACT_RATE=0.35,
                 RECOVERY_RATE=0.1,
                 WANING_RATE=0.01,
