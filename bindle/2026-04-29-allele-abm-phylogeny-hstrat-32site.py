@@ -27,9 +27,7 @@ def import_pkg():
 
     import downstream.dstream as dstream
     import hstrat
-    import iplotx as ipx
     import marimo as mo
-    import matplotlib.colors as mcolors
     import matplotlib.pyplot as plt
     from matplotlib.ticker import FuncFormatter, MaxNLocator
     import numpy as np
