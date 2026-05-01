@@ -481,7 +481,7 @@ def def_simulate(
             new_bits = xp.random.randint(
                 0, 2, size=POP_SIZE, dtype=xp.uint64,
             )
-            pathogen_markers ^= (new_bits << xp.uint64(site))
+            pathogen_markers ^= (new_bits << np.uint64(63 - site))
             return pathogen_markers
 
         def update_simulation(
@@ -639,15 +639,15 @@ def def_simulate(
         # `np.uint32.astype(">u4")` is the big-endian encoding for the
         # `dstream_T` prefix; the storage hex follows per the layout
         # documented in `hstrat.serialization.surf_to_hex`.
-        T_bytes_hex = sampled_steps.astype(">u4").tobytes()
-        marker_bytes_hex = sampled_markers.astype(">u8").tobytes()
+        T_bytes_hex = sampled_steps.astype(">u4").tobytes().hex()
+        marker_bytes_hex = sampled_markers.astype(">u8").tobytes().hex()
         data_hex = [
             (
-                T_bytes_hex[i * bytes_per_T : (i + 1) * bytes_per_T]
+                T_bytes_hex[i * bytes_per_T * 2 : (i + 1) * bytes_per_T * 2]
                 + marker_bytes_hex[
-                    i * bytes_per_storage : (i + 1) * bytes_per_storage
+                    i * bytes_per_storage * 2 : (i + 1) * bytes_per_storage * 2
                 ]
-            ).hex()
+            )
             for i in range(n_sample)
         ]
 
