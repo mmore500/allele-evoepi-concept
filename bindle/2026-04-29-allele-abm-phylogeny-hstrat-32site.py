@@ -128,9 +128,13 @@ def delimit_simulation(mo):
     `configure_args` cell). Phylogeny estimation still uses
     *hereditary stratigraphic surface* annotations (see
     https://hstrat.rtfd.io). Each infected host carries a `dstream_S=64`-site,
-    64-bit "hybrid" surface that ingests one differentia per simulation step;
-    on transmission the donor surface state is copied to the recipient (the
-    ABM analogue of `CloneDescendant`). At the end of the run a single
+    1-bit "hybrid" surface — all S=64 differentia bits are packed into a
+    single `uint64` per host, so `pathogen_markers` is a flat
+    `(POP_SIZE,)` array. Buffers are randomized at population init,
+    representing the post-predeposit state after S implicit deposits, so
+    real per-step deposits begin past `dstream_T = S`. On transmission
+    the donor surface state is copied to the recipient (the ABM analogue
+    of `CloneDescendant`). At the end of the run a single
     sample of `N_SAMPLE` currently-extant infections is taken; their surface
     buffers feed `surface_unpack_reconstruct` + `surface_postprocess_trie`
     to produce the estimated phylogeny. Per-step prevalence is logged by
@@ -210,15 +214,18 @@ def def_simulate(
         else:
             genome_dtype = xp.uint16
 
-        # Vectorized hstrat surface state. Shape (POP_SIZE, S) uint64; each
-        # row mirrors a `HereditaryStratigraphicSurface(stratum_differentia_
-        # bit_width=64)` buffer. Initial random fill stands in for the S
-        # "predeposit" strata that fill the buffer at construction time;
-        # after `step_count` simulation steps the per-row dstream_T is
-        # `step_count` (predeposit ranks live at `dstream_rank < dstream_S`
-        # and are stripped by `surface_postprocess_trie(delete_trunk=True)`).
-        # At the end of the run, `N_SAMPLE` extant infections are sampled
-        # and their surface buffers passed through
+        # Vectorized hstrat surface state. Shape (POP_SIZE,) uint64; each
+        # value packs S=64 1-bit differentia, mirroring a
+        # `HereditaryStratigraphicSurface(stratum_differentia_bit_width=1)`
+        # buffer. The random init represents the buffer state assuming S
+        # implicit "predeposit" strata have already been laid down, so the
+        # dstream algorithm is queried in its post-predeposit regime from
+        # the very first sim step (predeposit ranks live at `dstream_rank
+        # < dstream_S` and are stripped by
+        # `surface_postprocess_trie(delete_trunk=True)`). After
+        # `step_count` simulation steps the per-row dstream_T is
+        # `step_count + S`. At the end of the run, `N_SAMPLE` extant
+        # infections are sampled and their surface buffers passed through
         # `hstrat.dataframe.surface_unpack_reconstruct` for tree estimation.
 
         def initialize_pop() -> (
@@ -236,19 +243,20 @@ def def_simulate(
             host_statuses = xp.full(
                 shape=POP_SIZE, fill_value=0, dtype=xp.uint8
             )
-            # Random S-stratum fill mirrors the surface's predeposit phase;
-            # uninfected slots are overwritten when a host gets infected.
+            # Single uint64 per host packs all S=64 1-bit differentia.
+            # The random fill represents the buffer state assuming S
+            # implicit deposits have happened, so the dstream algorithm
+            # starts in its post-predeposit phase. Numpy's `randint` maxes
+            # at int64, so generate the lower 63 bits then OR in a random
+            # top bit.
             pathogen_markers = xp.random.randint(
-                low=0,
-                high=2**63,
-                size=(POP_SIZE, DSTREAM_S),
-                dtype=xp.int64,
+                low=0, high=2**63, size=POP_SIZE, dtype=xp.int64,
             ).astype(xp.uint64)
             pathogen_markers |= (
                 xp.random.randint(
-                    low=0, high=2, size=(POP_SIZE, DSTREAM_S), dtype=xp.uint64
+                    low=0, high=2, size=POP_SIZE, dtype=xp.uint64,
                 )
-                << 63
+                << xp.uint64(63)
             )
             return (
                 host_statuses,
@@ -458,26 +466,29 @@ def def_simulate(
             pathogen_markers: xp.ndarray,
             t: int,
         ) -> xp.ndarray:
-            """Deposit one stratum on every infected host's surface.
+            """Deposit one 1-bit stratum on every infected host's surface.
 
             The site is computed once per step from the global dstream_T
-            (`t` here, where `t == 1` is the first real deposit on top of
-            the random S-stratum init); a `None` site means the algorithm
-            chose to retain the existing buffer this step.
+            (`t + DSTREAM_S`, since the random init counts as S implicit
+            predeposits); a `None` site means the algorithm chose to
+            retain the existing buffer this step. A uniform random 0/1
+            bit is shifted to position `site` and XOR-ed into each
+            infected host's packed uint64 — XOR-with-uniform yields a
+            uniform output bit regardless of what was there before, so
+            half the time it's a no-op (XOR with 0) and half the time it
+            flips.
             """
-            site = DSTREAM_ALGO.assign_storage_site(DSTREAM_S, t)
+            site = DSTREAM_ALGO.assign_storage_site(DSTREAM_S, t + DSTREAM_S)
             if site is None:
                 return pathogen_markers
             infected_idx = xp.where(host_statuses > 0)[0]
             n_inf = int(infected_idx.size)
             if n_inf == 0:
                 return pathogen_markers
-            # uint64 random fill in two halves (numpy's randint maxes at int64)
-            new_lo = xp.random.randint(
-                0, 2**63, size=n_inf, dtype=xp.int64
-            ).astype(xp.uint64)
-            new_hi = xp.random.randint(0, 2, size=n_inf, dtype=xp.uint64) << 63
-            pathogen_markers[infected_idx, site] = new_lo | new_hi
+            new_bits = xp.random.randint(
+                0, 2, size=n_inf, dtype=xp.uint64,
+            )
+            pathogen_markers[infected_idx] ^= new_bits << xp.uint64(site)
             return pathogen_markers
 
         def update_simulation(
@@ -542,7 +553,7 @@ def def_simulate(
                 pathogen_genomes,
                 host_immunities,
                 pathogen_markers,
-                t + 1,
+                t,
             )
 
             inf_mask = host_statuses > 0
@@ -595,17 +606,17 @@ def def_simulate(
         # Sample `N_SAMPLE` extant infections at the end of the run and
         # build the records dataframe expected by
         # `hstrat.dataframe.surface_unpack_reconstruct`. All sampled tips
-        # share `dstream_T = N_STEPS` (one deposit per step) and are
-        # marked extant; the implicit S predeposit strata sit at negative
-        # ranks and get stripped by
+        # share `dstream_T = N_STEPS + S` (S implicit pre-sim deposits +
+        # one per step) and are marked extant; the implicit S predeposit
+        # strata sit at the trunk and get stripped by
         # `surface_postprocess_trie(delete_trunk=True)`.
         algo_name = f"dstream.{DSTREAM_ALGO.__name__}"
         S = DSTREAM_S
         T_bitwidth = 32
-        bitwidth = 64
+        bitwidth = 1  # 1-bit differentia, S=64 of them packed into one uint64
         bytes_per_T = T_bitwidth // 8  # 4
-        bytes_per_storage = S * (bitwidth // 8)  # 64*8 = 512
-        bytes_per_row = bytes_per_T + bytes_per_storage
+        bytes_per_storage = S * bitwidth // 8  # 64*1//8 = 8
+        bytes_per_row = bytes_per_T + bytes_per_storage  # 12
         empty_records = pd.DataFrame(
             {
                 "data_hex": pd.Series([], dtype=str),
@@ -623,10 +634,9 @@ def def_simulate(
         )
         infected_idx = xp.where(host_statuses > 0)[0]
         n_inf = int(infected_idx.size)
-        # `surface_unpack_reconstruct` requires `dstream_T >= dstream_S`;
-        # one deposit per step means we need at least `DSTREAM_S` steps
-        # before the surface buffer leaves its predeposit phase.
-        if n_inf == 0 or N_STEPS < DSTREAM_S:
+        # The random init counts as S implicit deposits, so the surface
+        # is past predeposit from the very first step — no warm-up guard.
+        if n_inf == 0:
             return df, hw_df, empty_records
 
         n_sample = min(N_SAMPLE, n_inf)
@@ -637,7 +647,7 @@ def def_simulate(
         )
         sampled_markers = np.asarray(pathogen_markers[sampled])
         sampled_genomes = np.asarray(pathogen_genomes[sampled])
-        sampled_steps = np.full(n_sample, N_STEPS, dtype=np.uint32)
+        sampled_steps = np.full(n_sample, N_STEPS + DSTREAM_S, dtype=np.uint32)
         sampled_taxon_ids = np.arange(n_sample, dtype=np.int64)
 
         # `np.uint32.astype(">u4")` is the big-endian encoding for the
