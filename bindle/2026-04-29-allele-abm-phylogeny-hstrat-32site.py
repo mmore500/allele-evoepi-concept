@@ -95,6 +95,7 @@ def configure_args(mo):
     # current sweep settings: POP_SIZE=200_000 hosts and N_STEPS=100 steps.
     _args = mo.cli_args()
     POP_SIZE = int(_args.get("pop-size") or 200_000)
+    POW = float(_args.get("pow") or 1.0)
     N_STEPS = int(_args.get("n-steps") or 100)
     N_REPLICATES = int(_args.get("n-replicates") or 1)
     ENGINE = str(_args.get("engine") or "numpy").lower()
@@ -108,7 +109,7 @@ def configure_args(mo):
         f"N_REPLICATES={N_REPLICATES} ENGINE={ENGINE} "
         f"SKIP_PLOTTING={SKIP_PLOTTING}",
     )
-    return ENGINE, N_REPLICATES, N_STEPS, POP_SIZE, SKIP_PLOTTING
+    return ENGINE, N_REPLICATES, N_STEPS, POP_SIZE, SKIP_PLOTTING, POW
 
 
 @app.cell
@@ -137,9 +138,13 @@ def delimit_simulation(mo):
     `configure_args` cell). Phylogeny estimation still uses
     *hereditary stratigraphic surface* annotations (see
     https://hstrat.rtfd.io). Each infected host carries a `dstream_S=64`-site,
-    64-bit "hybrid" surface that ingests one differentia per simulation step;
-    on transmission the donor surface state is copied to the recipient (the
-    ABM analogue of `CloneDescendant`). At the end of the run a single
+    1-bit "hybrid" surface — all S=64 differentia bits are packed into a
+    single `uint64` per host, so `pathogen_markers` is a flat
+    `(POP_SIZE,)` array. Buffers are randomized at population init,
+    representing the post-predeposit state after S implicit deposits, so
+    real per-step deposits begin past `dstream_T = S`. On transmission
+    the donor surface state is copied to the recipient (the ABM analogue
+    of `CloneDescendant`). At the end of the run a single
     sample of `N_SAMPLE` currently-extant infections is taken; their surface
     buffers feed `surface_unpack_reconstruct` + `surface_postprocess_trie`
     to produce the estimated phylogeny. Per-step prevalence is logged by
@@ -192,6 +197,7 @@ def def_simulate(
         DSTREAM_S: int = 64,
         DSTREAM_ALGO=None,
         N_SAMPLE: int = 2000,
+        pow: float = 1.0,
     ) -> Union[
         Tuple[pd.DataFrame, pd.DataFrame],
         Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame],
@@ -219,23 +225,10 @@ def def_simulate(
         else:
             genome_dtype = xp.uint16
 
-        # Vectorized hstrat surface state. Shape (POP_SIZE, S) uint64; each
-        # row mirrors a `HereditaryStratigraphicSurface(stratum_differentia_
-        # bit_width=64)` buffer. Initial random fill stands in for the S
-        # "predeposit" strata that fill the buffer at construction time;
-        # after `step_count` simulation steps the per-row dstream_T is
-        # `step_count` (predeposit ranks live at `dstream_rank < dstream_S`
-        # and are stripped by `surface_postprocess_trie(delete_trunk=True)`).
-        # At the end of the run, `N_SAMPLE` extant infections are sampled
-        # and their surface buffers passed through
-        # `hstrat.dataframe.surface_unpack_reconstruct` for tree estimation.
-
         def initialize_pop() -> (
             Tuple[xp.ndarray, xp.ndarray, xp.ndarray, xp.ndarray]
         ):
             """Initialize population statuses, genomes, and immune history."""
-            # `genome_dtype` is sized to fit `N_SITES` bits — `uint16` for
-            # `N_SITES <= 16`, `uint32` up to 32, `uint64` up to 64.
             pathogen_genomes = xp.zeros(shape=POP_SIZE, dtype=genome_dtype)
             host_immunities = xp.full(
                 shape=(POP_SIZE, 2 * N_SITES),
@@ -245,19 +238,14 @@ def def_simulate(
             host_statuses = xp.full(
                 shape=POP_SIZE, fill_value=0, dtype=xp.uint8
             )
-            # Random S-stratum fill mirrors the surface's predeposit phase;
-            # uninfected slots are overwritten when a host gets infected.
             pathogen_markers = xp.random.randint(
-                low=0,
-                high=2**63,
-                size=(POP_SIZE, DSTREAM_S),
-                dtype=xp.int64,
+                low=0, high=2**63, size=POP_SIZE, dtype=xp.int64,
             ).astype(xp.uint64)
             pathogen_markers |= (
                 xp.random.randint(
-                    low=0, high=2, size=(POP_SIZE, DSTREAM_S), dtype=xp.uint64
+                    low=0, high=2, size=POP_SIZE, dtype=xp.uint64,
                 )
-                << 63
+                << xp.uint64(63)
             )
             return (
                 host_statuses,
@@ -294,23 +282,14 @@ def def_simulate(
                 pathogen_bits[:, :, None] == xp.array([0, 1])
             ).reshape(-1, 2 * N_SITES)
 
-            # active_susc = xp.where(
-            #     pathogen_alleles, host_susceptibilities, 1.0
-            # )
-            # res = xp.prod(active_susc, axis=1)
             active_susc = xp.where(
-                pathogen_alleles, host_susceptibilities, np.nan
+                pathogen_alleles, host_susceptibilities, 1.0
             )
-            res = (
-                xp.nanmean(active_susc, axis=1)
-                * xp.nanmax(active_susc, axis=1)
-                * xp.nanmin(host_susceptibilities, axis=1)
-            )
+            res = xp.prod(active_susc, axis=1)
             assert res.shape == (POP_SIZE,)
-            return res
+            return xp.pow(res, pow)
 
         if MUTATION_RATE.size == 1:
-
             def calc_mutation_probabilities(
                 host_immunities: xp.ndarray,
                 pathogen_genomes: xp.ndarray,
@@ -339,13 +318,10 @@ def def_simulate(
                     xp.abs(b_values - 1.0) < 1e-7, 1.000001, b_values
                 )
 
-                # \\frac{y}{x} = \\frac{m}{b-1} \\left( e^{(b-1)t} - 1 \\right)
                 return (MUTATION_RATE / (b_values - 1.0)) * (
                     xp.exp((b_values - 1.0) * within_host_t) - 1.0
                 )
-
         else:
-
             def calc_mutation_probabilities(
                 host_immunities: xp.ndarray,
                 pathogen_genomes: xp.ndarray,
@@ -357,7 +333,6 @@ def def_simulate(
                 )
 
         def update_waning(host_immunities: xp.ndarray) -> xp.ndarray:
-            """Decay immunity levels over time."""
             host_immunities *= 1.0 - WANING_RATE
             host_immunities[host_immunities > 0] = xp.clip(
                 host_immunities[host_immunities > 0],
@@ -371,10 +346,6 @@ def def_simulate(
             host_immunities: xp.ndarray,
             pathogen_genomes: xp.ndarray,
         ) -> Tuple[xp.ndarray, xp.ndarray]:
-            """Recover infected individuals with probability RECOVERY_RATE."""
-            # Each infected host recovers independently at rate RECOVERY_RATE,
-            # regardless of how long they have been infected. This matches the
-            # ODE's per-person recovery rate.
             recovered_mask = (host_statuses >= 1) * xp.random.rand(
                 POP_SIZE
             ) > 1 - RECOVERY_RATE
@@ -405,7 +376,6 @@ def def_simulate(
             host_immunities: xp.ndarray,
             pathogen_markers: xp.ndarray,
         ) -> Tuple[xp.ndarray, xp.ndarray, xp.ndarray]:
-            """Vectorized transmission based on allele-specific susceptibility."""
             contacts = xp.random.randint(
                 low=0, high=POP_SIZE, size=POP_SIZE, dtype=xp.uint32
             )
@@ -423,14 +393,9 @@ def def_simulate(
             pathogen_genomes[new_infections] = pathogen_genomes[contacts][
                 new_infections
             ]
-            if track_phylogeny:
-                # Recipient inherits donor's surface state — vectorized
-                # analogue of `HereditaryStratigraphicSurface.CloneDescendant`
-                # without the post-clone deposit (the deposit happens later
-                # in the step for all infected hosts uniformly).
-                pathogen_markers[new_infections] = pathogen_markers[
-                    contacts[new_infections]
-                ]
+            pathogen_markers[new_infections] = pathogen_markers[contacts][
+                new_infections
+            ]
 
             return host_statuses, pathogen_genomes, pathogen_markers
 
@@ -438,7 +403,6 @@ def def_simulate(
             pathogen_genomes: xp.ndarray,
             host_statuses: xp.ndarray,
         ) -> xp.ndarray:
-            """Apply mutations to newly infected individuals."""
             mutation_mask = (host_statuses == 1).astype(bool)
 
             mprobs = calc_mutation_probabilities(
@@ -463,30 +427,16 @@ def def_simulate(
             return pathogen_genomes
 
         def deposit_strata(
-            host_statuses: xp.ndarray,
             pathogen_markers: xp.ndarray,
             t: int,
         ) -> xp.ndarray:
-            """Deposit one stratum on every infected host's surface.
-
-            The site is computed once per step from the global dstream_T
-            (`t` here, where `t == 1` is the first real deposit on top of
-            the random S-stratum init); a `None` site means the algorithm
-            chose to retain the existing buffer this step.
-            """
-            site = DSTREAM_ALGO.assign_storage_site(DSTREAM_S, t)
+            site = DSTREAM_ALGO.assign_storage_site(DSTREAM_S, t + DSTREAM_S)
             if site is None:
                 return pathogen_markers
-            infected_idx = xp.where(host_statuses > 0)[0]
-            n_inf = int(infected_idx.size)
-            if n_inf == 0:
-                return pathogen_markers
-            # uint64 random fill in two halves (numpy's randint maxes at int64)
-            new_lo = xp.random.randint(
-                0, 2**63, size=n_inf, dtype=xp.int64
-            ).astype(xp.uint64)
-            new_hi = xp.random.randint(0, 2, size=n_inf, dtype=xp.uint64) << 63
-            pathogen_markers[infected_idx, site] = new_lo | new_hi
+            new_bits = xp.random.randint(
+                0, 2, size=POP_SIZE, dtype=xp.uint64,
+            )
+            pathogen_markers ^= (new_bits << np.uint64(63 - site))
             return pathogen_markers
 
         def update_simulation(
@@ -496,7 +446,6 @@ def def_simulate(
             pathogen_markers: xp.ndarray,
             t: int,
         ) -> Tuple[xp.ndarray, xp.ndarray, xp.ndarray, xp.ndarray]:
-            """Run one step of the simulation."""
             (
                 host_statuses,
                 pathogen_genomes,
@@ -512,14 +461,7 @@ def def_simulate(
                 host_statuses, host_immunities, pathogen_genomes
             )
             host_immunities = update_waning(host_immunities)
-            if track_phylogeny:
-                # Stratum deposit comes after recoveries so just-recovered
-                # hosts (whose `host_statuses` is now 0) don't get a fresh
-                # stratum — their surface state stops evolving once the
-                # lineage dies out, which is the correct semantics.
-                pathogen_markers = deposit_strata(
-                    host_statuses, pathogen_markers, t
-                )
+            pathogen_markers = deposit_strata(pathogen_markers, t)
 
             return (
                 host_statuses,
@@ -551,7 +493,7 @@ def def_simulate(
                 pathogen_genomes,
                 host_immunities,
                 pathogen_markers,
-                t + 1,
+                t,
             )
 
             inf_mask = host_statuses > 0
@@ -601,19 +543,12 @@ def def_simulate(
         if not track_phylogeny:
             return df, hw_df
 
-        # Sample `N_SAMPLE` extant infections at the end of the run and
-        # build the records dataframe expected by
-        # `hstrat.dataframe.surface_unpack_reconstruct`. All sampled tips
-        # share `dstream_T = N_STEPS` (one deposit per step) and are
-        # marked extant; the implicit S predeposit strata sit at negative
-        # ranks and get stripped by
-        # `surface_postprocess_trie(delete_trunk=True)`.
         algo_name = f"dstream.{DSTREAM_ALGO.__name__}"
         S = DSTREAM_S
         T_bitwidth = 32
-        bitwidth = 64
-        bytes_per_T = T_bitwidth // 8  # 4
-        bytes_per_storage = S * (bitwidth // 8)  # 64*8 = 512
+        bitwidth = 1
+        bytes_per_T = T_bitwidth // 8
+        bytes_per_storage = S * bitwidth // 8
         bytes_per_row = bytes_per_T + bytes_per_storage
         empty_records = pd.DataFrame(
             {
@@ -632,10 +567,7 @@ def def_simulate(
         )
         infected_idx = xp.where(host_statuses > 0)[0]
         n_inf = int(infected_idx.size)
-        # `surface_unpack_reconstruct` requires `dstream_T >= dstream_S`;
-        # one deposit per step means we need at least `DSTREAM_S` steps
-        # before the surface buffer leaves its predeposit phase.
-        if n_inf == 0 or N_STEPS < DSTREAM_S:
+        if n_inf == 0:
             return df, hw_df, empty_records
 
         n_sample = min(N_SAMPLE, n_inf)
@@ -644,26 +576,24 @@ def def_simulate(
             if n_sample < n_inf
             else infected_idx
         )
-        # `cupy` arrays disallow implicit `np.asarray` conversion; copy to
-        # host with `.get()` first when running on GPU.
+
+        # CUPY SUPPORT: Transfer to host if using GPU
         _to_np = (lambda a: np.asarray(a)) if xp is np else (lambda a: a.get())
         sampled_markers = _to_np(pathogen_markers[sampled])
         sampled_genomes = _to_np(pathogen_genomes[sampled])
-        sampled_steps = np.full(n_sample, N_STEPS, dtype=np.uint32)
+        # Rank includes implicit predeposits
+        sampled_steps = np.full(n_sample, N_STEPS + DSTREAM_S, dtype=np.uint32)
         sampled_taxon_ids = np.arange(n_sample, dtype=np.int64)
 
-        # `np.uint32.astype(">u4")` is the big-endian encoding for the
-        # `dstream_T` prefix; the storage hex follows per the layout
-        # documented in `hstrat.serialization.surf_to_hex`.
-        T_bytes_hex = sampled_steps.astype(">u4").tobytes()
-        marker_bytes_hex = sampled_markers.astype(">u8").tobytes()
+        T_bytes_hex = sampled_steps.astype(">u4").tobytes().hex()
+        marker_bytes_hex = sampled_markers.astype(">u8").tobytes().hex()
         data_hex = [
             (
-                T_bytes_hex[i * bytes_per_T : (i + 1) * bytes_per_T]
+                T_bytes_hex[i * bytes_per_T * 2 : (i + 1) * bytes_per_T * 2]
                 + marker_bytes_hex[
-                    i * bytes_per_storage : (i + 1) * bytes_per_storage
+                    i * bytes_per_storage * 2 : (i + 1) * bytes_per_storage * 2
                 ]
-            ).hex()
+            )
             for i in range(n_sample)
         ]
 
@@ -703,8 +633,7 @@ def delimit_reconstruct(mo):
     True)`, run `hstrat.dataframe.surface_unpack_reconstruct` followed by
     `hstrat.dataframe.surface_postprocess_trie` to estimate the phylogenetic
     tree. We use `AssignOriginTimeNodeRankTriePostprocessor(t0="dstream_S")`
-    so that origin times line up with simulation step numbers (the trunk
-    deposits at `dstream_rank < dstream_S` are deleted by default).
+    so that origin times line up with simulation step numbers.
     """
     )
     return
@@ -715,41 +644,20 @@ def def_reconstruct_phylogeny(gc, hstrat, pd, pl):
     def reconstruct_phylogeny(
         records_df: pd.DataFrame,
     ) -> pd.DataFrame:
-        """Run surface_unpack_reconstruct + postprocess to get an alife df.
-
-        The returned dataframe is in alife-standard format with extra
-        ``snapshot_step`` / ``genome`` / ``extant`` columns forwarded from
-        the input records. The `origin_time` column reports the simulation
-        step at which each (estimated) lineage diverged.
-        """
         in_df = pl.from_pandas(records_df)
-        recon = hstrat.dataframe.surface_unpack_reconstruct(in_df)
-        # The unpack frame is the largest intermediate (one row per
-        # retained stratum across all sampled tips); free it before
-        # `surface_postprocess_trie` allocates its own internal buffers.
-        post = hstrat.dataframe.surface_postprocess_trie(
-            recon,
+        post = hstrat.dataframe.surface_build_tree(
+            in_df,
             trie_postprocessor=(
                 hstrat.phylogenetic_inference.AssignOriginTimeNodeRankTriePostprocessor(
                     t0="dstream_S",
                 )
             ),
         ).to_pandas()
-        del recon, in_df
         gc.collect()
-        # phyloframe's CSR builder fast path uses
-        # `np.full(n, -1, dtype=ancestor_ids.dtype)`, which OverflowErrors
-        # when `ancestor_id` is `pl.UInt64`; cast id columns to int64 here
-        # so all downstream phyloframe pipelines (e.g. `alifestd_to_iplotx`,
-        # `alifestd_downsample_tips_uniform_asexual`) work.
         for col in ("id", "ancestor_id"):
             if col in post.columns:
                 post[col] = post[col].astype("int64")
-        # `extant` defaults to NaN for inner nodes; cast to bool with NaN→False
-        # so phyloframe predicate filters work cleanly.
         post["extant"] = post["extant"].fillna(False).astype(bool)
-        # Inner nodes don't carry a snapshot/genome — coerce to numeric (NaN
-        # for inner) so leaf-only `.astype(int)` calls in the plotter work.
         for col in ("snapshot_step", "genome", "origin_time"):
             if col in post.columns:
                 post[col] = pd.to_numeric(post[col], errors="coerce")
@@ -765,9 +673,7 @@ def delimit_phylogeny(mo):
     ## Surface-Reconstructed Phylogeny
 
     Sweep `N_SITES` over a few values and render the surface-reconstructed
-    phylogeny next to the absolute-prevalence and Hamming-weight stackplots,
-    matching the layout of `2026-04-28-allele-abm-phylogeny.py`. Tips and the
-    stackplots share a per-strain `husl` palette.
+    phylogeny next to the absolute-prevalence and Hamming-weight stackplots.
     """
     )
     return
@@ -793,18 +699,15 @@ def def_make_phylogeny_plot(
         phylogeny_df,
         max_tips: int = 10_000,
         seed: int = 0,
+        teeplot_outattrs: dict = {},
     ) -> None:
-        # Mirror the exact-tracking notebook's pruning steps so the figures
-        # are visually comparable: uniform tip downsampling + unifurcation
-        # collapse + ladderize. Synthetic global root collapses multi-seed
-        # origins to a single root (iplotx requirement).
         pruned_df = (
             pfl.alifestd_downsample_tips_uniform_asexual(
                 phylogeny_df,
                 n_downsample=max_tips,
                 seed=0,
             )
-            .pipe(pfl.alifestd_add_global_root)
+            .pipe(pfl.alifestd_add_global_root, root_attrs={"origin_time": 0})
             .pipe(pfl.alifestd_collapse_unifurcations)
             .pipe(pfl.alifestd_try_add_ancestor_list_col)
             .pipe(pfl.alifestd_ladderize_asexual)
@@ -814,9 +717,6 @@ def def_make_phylogeny_plot(
         print(f"  downsampled tree: {len(pruned_df)} nodes")
         print(f"  leaf count: {pfl.alifestd_count_leaf_nodes(pruned_df)}")
 
-        # Each leaf carries the snapshot pathogen `genome`; map it to a
-        # Hamming weight so tips share the HW palette used by the
-        # accompanying prevalence panels.
         pruned_df = pruned_df.assign(
             hw=pruned_df["genome"].map(
                 lambda g: None if pd.isna(g) else bin(int(g)).count("1"),
@@ -831,11 +731,6 @@ def def_make_phylogeny_plot(
         hw_values = list(range(N_SITES + 1))
         hw_palette = sns.color_palette("rocket_r", len(hw_values))
 
-        # `hw_df` is long form: one row per (Step, hw) with `count`
-        # giving the per-step prevalence of infections at that Hamming
-        # weight. Build a `hw_label` column for hue ordering and palette
-        # lookup, and an inverted `y` for top-down plotting alongside the
-        # tree.
         present_hw = sorted(int(w) for w in hw_df["hw"].unique())
         hw_labels = [f"HW {w}" for w in present_hw]
         plot_df = hw_df.assign(
@@ -875,13 +770,7 @@ def def_make_phylogeny_plot(
                 "wspace": 0.1,
             },
             sharey=True,
-            teeplot_outattrs={
-                "what": "phylogeny",
-                "n_sites": N_SITES,
-                "n_steps": int(phylo_df["Step"].max()) + 1,
-                "replicate": seed,
-                "method": "hstrat-surface",
-            },
+            teeplot_outattrs=teeplot_outattrs,
             teeplot_show=True,
             teeplot_subdir=pathlib.Path(__file__).stem,
         ) as (fig, axes):
@@ -989,6 +878,7 @@ def run_phylogeny_sweep(
     N_STEPS,
     POP_SIZE,
     SKIP_PLOTTING,
+    POW,
     gc,
     make_phylogeny_plot,
     pathlib,
@@ -997,24 +887,14 @@ def run_phylogeny_sweep(
     simulate,
     uuid,
 ):
-    # Sweep over (16, 32, 64)-bit genomes × `N_REPLICATES` replicate seeds.
-    # Each replicate gets a fresh `replicate_uid`; the same uid is stamped
-    # onto rows in the trajectory, raw-records, and reconstructed-phylogeny
-    # parquets so joins across the three files are unambiguous.
-    # `N_SAMPLE` caps memory: it bounds the number of extant infections
-    # snapshotted at the end of the run that flow into
-    # `surface_unpack_reconstruct` (each row is ~1 KB of hex). Use the
-    # canonical 64-bit hybrid algo, `dstream.hybrid_0_steady_1_tilted_2_algo`.
     PHYLO_MUTATION_RATE = 1e-5
+    POW_ = POW
 
     nbname = pathlib.Path(__file__).stem
     out_dir = pathlib.Path("outdata") / nbname
     out_dir.mkdir(parents=True, exist_ok=True)
 
     def _save_replicate(kind: str, uid: str, df) -> None:
-        # One folder per datatype, then a uid-named subfolder per replicate.
-        # Filenames stay alife-style so downstream readers don't need a new
-        # convention.
         rep_dir = out_dir / kind / uid
         rep_dir.mkdir(parents=True, exist_ok=True)
         rep_path = rep_dir / f"a={kind}+what={nbname}+ext=.pqt"
@@ -1048,13 +928,10 @@ def run_phylogeny_sweep(
                 seed=_seed,
                 track_phylogeny=True,
                 N_SAMPLE=200,
+                pow=POW_,
             )
             print(f"  snapshot rows: {len(_records_df)}")
 
-            # Stamp every row with the replicate's parameter key + uid so
-            # the per-replicate trajectory, hw, records, and phylogeny
-            # files can be split apart again downstream by filtering on
-            # `replicate_uid`.
             _params = {
                 "replicate_uid": replicate_uid,
                 "seed": _seed,
@@ -1062,6 +939,7 @@ def run_phylogeny_sweep(
                 "pop_size": POP_SIZE,
                 "n_steps": N_STEPS,
                 "engine": ENGINE,
+                "pow": POW_,
             }
             _traj_stamped = _phylo_df.assign(**_params)
             _hw_stamped = _hw_df.assign(**_params)
@@ -1069,26 +947,19 @@ def run_phylogeny_sweep(
             hw_chunks.append(_hw_stamped)
             _save_replicate("traj", replicate_uid, _traj_stamped)
             _save_replicate("hw", replicate_uid, _hw_stamped)
-            # Save the *raw* surface records (the input to
-            # `surface_unpack_reconstruct`) so reconstruction can be re-run
-            # downstream without re-simulating. Empty records frames are
-            # appended too — they preserve the (replicate_uid, params)
-            # bookkeeping for replicates whose lineage died before
-            # `dstream_S` deposits accumulated.
+
             _records_stamped = _records_df.assign(**_params)
             records_chunks.append(_records_stamped)
             _save_replicate("records", replicate_uid, _records_stamped)
 
             if len(_records_df) == 0:
-                print("  (no infected hosts past S=64 — skipping plot)")
+                print("  (no infected hosts --- skipping plot)")
                 del _phylo_df, _hw_df, _records_df
                 gc.collect()
                 continue
+
             print(f"  extant rows: {int(_records_df['extant'].sum())}")
             _phylogeny_df = reconstruct_phylogeny(_records_df)
-            # Free the records dataframe right after reconstruct — the hex
-            # column is the biggest single buffer in the pipeline and isn't
-            # needed once the alife df is built.
             del _records_df
             gc.collect()
             print(f"  reconstructed: {len(_phylogeny_df)} nodes")
@@ -1107,14 +978,17 @@ def run_phylogeny_sweep(
                     _hw_df,
                     _phylogeny_df,
                     seed=_seed,
+                    teeplot_outattrs={
+                        "n_sites": PHYLO_N_SITES,
+                        "n_steps": int(_phylo_df["Step"].max()) + 1,
+                        "replicate": _seed,
+                        "method": "hstrat-surface",
+                        "pow": POW_,
+                    },
                 )
             del _phylo_df, _hw_df, _phylogeny_df
             gc.collect()
 
-    # Concat-across-replicates → four parquet files (trajectory, hw,
-    # raw records, reconstructed phylogeny). `Susc_*` columns vary in
-    # cardinality across `N_SITES`, so missing columns auto-fill NaN on
-    # concat — that's expected.
     traj_df_all = (
         pd.concat(traj_chunks, ignore_index=True)
         if traj_chunks
