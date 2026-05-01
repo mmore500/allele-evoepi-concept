@@ -1011,7 +1011,7 @@ def run_phylogeny_sweep(
                 MUTATION_RATE=PHYLO_MUTATION_RATE,
                 N_SITES=PHYLO_N_SITES,
                 N_STEPS=N_STEPS,
-                POP_SIZE=50_000,
+                POP_SIZE=POP_SIZE,
                 CONTACT_RATE=0.35,
                 RECOVERY_RATE=0.1,
                 WANING_RATE=0.01,
