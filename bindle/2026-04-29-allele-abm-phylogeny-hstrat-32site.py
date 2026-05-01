@@ -20,6 +20,13 @@ def import_pkg():
     try:
         import cupy as cp
     except ImportError:
+        import warnings
+
+        warnings.warn(
+            "cupy import failed; falling back to numpy "
+            "(GPU engine unavailable)",
+            stacklevel=2,
+        )
         import numpy as cp
 
     # workaround: iplotx 1.7.x uses importlib.metadata without importing it
