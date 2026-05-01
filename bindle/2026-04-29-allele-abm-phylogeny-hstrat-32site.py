@@ -628,6 +628,9 @@ def def_simulate(
                 "snapshot_step": pd.Series([], dtype="int64"),
                 "genome": pd.Series([], dtype="int64"),
                 "taxon_id": pd.Series([], dtype="int64"),
+                "downstream_exclude_exploded": pd.Series([], dtype=bool),
+                "downstream_validate_exploded": pd.Series([], dtype=str),
+                "downstream_validate_unpacked": pd.Series([], dtype=str),
             },
         )
         infected_idx = xp.where(host_statuses > 0)[0]
@@ -680,6 +683,9 @@ def def_simulate(
                 "snapshot_step": sampled_steps.astype(np.int64),
                 "genome": sampled_genomes.astype(np.int64),
                 "taxon_id": sampled_taxon_ids,
+                "downstream_exclude_exploded": False,
+                "downstream_validate_exploded": "",
+                "downstream_validate_unpacked": "",
             }
         )
         assert all(len(h) == bytes_per_row * 2 for h in data_hex), (
@@ -687,6 +693,78 @@ def def_simulate(
             f"got {set(len(h) for h in data_hex)})"
         )
         del data_hex, T_bytes_hex, marker_bytes_hex
+
+        # Inject ephemeral validator records that round-trip through
+        # `surface_unpack_reconstruct` to assert the surface byte/bit order
+        # is being read back correctly. Each validator deposits a
+        # deterministic differentia value (rather than a random uint64) at
+        # the site `assign_storage_site(S, T)` chooses for that step; the
+        # polars predicates carried in `downstream_validate_*` are evaluated
+        # by the downstream unpacker and raise on mismatch (e.g., if
+        # endianness is wrong, `dstream_value` won't equal the expected
+        # function of `dstream_Tbar`). Records are flagged with
+        # `downstream_exclude_exploded=True` so they do not contaminate the
+        # reconstructed trie. Pattern adapted from
+        # https://github.com/mmore500/hstrat/blob/master/examples/evolve_dstream_surf.py
+        big_diff_dtype = f">u{bitwidth // 8}"
+        validator_n_gen = N_STEPS
+        validator_specs = [
+            # Checkerboard: low-bit alternation; primarily exercises the
+            # least-significant byte of each big-endian differentia slot.
+            (
+                lambda T: T % 2,
+                "pl.col('dstream_value') == pl.col('dstream_Tbar') % 2",
+            ),
+            # Block: changes once per (S // 2 + 1) steps; exercises a
+            # different bit pattern in the differentia slot.
+            (
+                lambda T, S=S: T // (S // 2 + 1),
+                f"pl.col('dstream_value') == "
+                f"pl.col('dstream_Tbar') // {S // 2 + 1}",
+            ),
+            # Identity: stores Tbar directly; exercises the upper bytes of
+            # the differentia slot whenever Tbar > 255.
+            (
+                lambda T: T,
+                "pl.col('dstream_value') == pl.col('dstream_Tbar')",
+            ),
+        ]
+        validator_rows = []
+        for vi, (override, exploded_pred) in enumerate(validator_specs):
+            buf = np.zeros(S, dtype=np.uint64)
+            for T in range(validator_n_gen):
+                site = DSTREAM_ALGO.assign_storage_site(S, T)
+                if site is not None:
+                    buf[site] = np.uint64(override(T))
+            T_bytes_v = np.uint32(validator_n_gen).astype(">u4").tobytes()
+            buf_bytes = buf.astype(big_diff_dtype).tobytes()
+            validator_rows.append(
+                {
+                    "data_hex": (T_bytes_v + buf_bytes).hex(),
+                    "dstream_algo": algo_name,
+                    "dstream_storage_bitoffset": bytes_per_T * 8,
+                    "dstream_storage_bitwidth": bytes_per_storage * 8,
+                    "dstream_T_bitoffset": 0,
+                    "dstream_T_bitwidth": T_bitwidth,
+                    "dstream_S": S,
+                    "extant": False,
+                    "snapshot_step": np.int64(validator_n_gen),
+                    "genome": np.int64(0),
+                    "taxon_id": np.int64(n_sample + vi),
+                    "downstream_exclude_exploded": True,
+                    "downstream_validate_exploded": exploded_pred,
+                    "downstream_validate_unpacked": (
+                        f"pl.col('dstream_T') == {validator_n_gen}"
+                    ),
+                }
+            )
+        assert all(
+            len(r["data_hex"]) == bytes_per_row * 2 for r in validator_rows
+        ), "validator hex length mismatch"
+        records_df = pd.concat(
+            [records_df, pd.DataFrame(validator_rows)], ignore_index=True
+        )
+        del validator_rows
         gc.collect()
         return df, hw_df, records_df
 
