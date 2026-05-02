@@ -241,14 +241,17 @@ def def_simulate(
                 shape=POP_SIZE, fill_value=0, dtype=xp.uint8
             )
             pathogen_markers = xp.random.randint(
-                low=0, high=2**63, size=POP_SIZE, dtype=xp.int64,
+                low=0,
+                high=2**63,
+                size=POP_SIZE,
+                dtype=xp.int64,
             ).astype(xp.uint64)
-            pathogen_markers |= (
-                xp.random.randint(
-                    low=0, high=2, size=POP_SIZE, dtype=xp.uint64,
-                )
-                << xp.uint64(63)
-            )
+            pathogen_markers |= xp.random.randint(
+                low=0,
+                high=2,
+                size=POP_SIZE,
+                dtype=xp.uint64,
+            ) << xp.uint64(63)
             return (
                 host_statuses,
                 pathogen_genomes,
@@ -292,6 +295,7 @@ def def_simulate(
             return xp.pow(res, pow)
 
         if MUTATION_RATE.size == 1:
+
             def calc_mutation_probabilities(
                 host_immunities: xp.ndarray,
                 pathogen_genomes: xp.ndarray,
@@ -323,7 +327,9 @@ def def_simulate(
                 return (MUTATION_RATE / (b_values - 1.0)) * (
                     xp.exp((b_values - 1.0) * within_host_t) - 1.0
                 )
+
         else:
+
             def calc_mutation_probabilities(
                 host_immunities: xp.ndarray,
                 pathogen_genomes: xp.ndarray,
@@ -436,9 +442,12 @@ def def_simulate(
             if site is None:
                 return pathogen_markers
             new_bits = xp.random.randint(
-                0, 2, size=POP_SIZE, dtype=xp.uint64,
+                0,
+                2,
+                size=POP_SIZE,
+                dtype=xp.uint64,
             )
-            pathogen_markers ^= (new_bits << np.uint64(63 - site))
+            pathogen_markers ^= new_bits << np.uint64(63 - site)
             return pathogen_markers
 
         def update_simulation(
@@ -981,12 +990,13 @@ def def_make_strain_graph_plot(ig, iplotx, np, pathlib, plt, sns, tp):
                 ax.set_title(f"n = {n}")
                 ax.set_aspect("equal")
 
-            present_hw = sorted(set(int(w) for w in hamming_weights))
-            if len(present_hw) > 6:
+            # Match make_phylogeny_plot's legend: span the same HW limits
+            # (min/max of present Hamming weights), with up to 4
+            # evenly-spaced entries.
+            present_hw = sorted(int(w) for w in set(hamming_weights.tolist()))
+            if len(present_hw) > 4:
                 idx = np.unique(
-                    np.linspace(0, len(present_hw) - 1, 6)
-                    .round()
-                    .astype(int)
+                    np.linspace(0, len(present_hw) - 1, 4).round().astype(int)
                 ).tolist()
                 legend_hw = [present_hw[i] for i in idx]
             else:
@@ -1052,7 +1062,6 @@ def run_phylogeny_sweep(
     hw_chunks = []
     records_chunks = []
     phylo_chunks = []
-
 
     for _seed in range(1, N_REPLICATES + 1):
         for PHYLO_N_SITES in (2, 3, 4, 8, 16):
