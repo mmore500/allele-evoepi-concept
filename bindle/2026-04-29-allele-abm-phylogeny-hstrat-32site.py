@@ -693,6 +693,7 @@ def def_make_phylogeny_plot(
         phylogeny_df,
         max_tips: int = 10_000,
         seed: int = 0,
+        palette: str = "rocket_r",
         teeplot_outattrs: dict = {},
     ) -> None:
         pruned_df = (
@@ -723,7 +724,7 @@ def def_make_phylogeny_plot(
         )
 
         hw_values = list(range(N_SITES + 1))
-        hw_palette = sns.color_palette("rocket_r", len(hw_values))
+        hw_palette = sns.color_palette(palette, len(hw_values))
 
         present_hw = sorted(int(w) for w in hw_df["hw"].unique())
         hw_labels = [f"HW {w}" for w in present_hw]
@@ -900,6 +901,7 @@ def run_phylogeny_sweep(
     records_chunks = []
     phylo_chunks = []
 
+
     for _seed in range(1, N_REPLICATES + 1):
         for PHYLO_N_SITES in (2, 3, 4, 8, 16):
             replicate_uid = uuid.uuid4().hex
@@ -963,23 +965,26 @@ def run_phylogeny_sweep(
             phylo_chunks.append(_phylo_stamped)
             _save_replicate("phylo", replicate_uid, _phylo_stamped)
 
-            if SKIP_PLOTTING:
-                print("  (SKIP_PLOTTING=True — skipping plot)")
-            else:
-                make_phylogeny_plot(
-                    PHYLO_N_SITES,
-                    _phylo_df,
-                    _hw_df,
-                    _phylogeny_df,
-                    seed=_seed,
-                    teeplot_outattrs={
-                        "n_sites": PHYLO_N_SITES,
-                        "n_steps": int(_phylo_df["Step"].max()) + 1,
-                        "replicate": _seed,
-                        "method": "hstrat-surface",
-                        "pow": POW_,
-                    },
-                )
+            for palette in "rocket_r", "tab20", "tab10":
+                if SKIP_PLOTTING:
+                    print("  (SKIP_PLOTTING=True — skipping plot)")
+                else:
+                    make_phylogeny_plot(
+                        PHYLO_N_SITES,
+                        _phylo_df,
+                        _hw_df,
+                        _phylogeny_df,
+                        seed=_seed,
+                        palette=palette,
+                        teeplot_outattrs={
+                            "n_sites": PHYLO_N_SITES,
+                            "n_steps": int(_phylo_df["Step"].max()) + 1,
+                            "replicate": _seed,
+                            "palette": palette,
+                            "method": "hstrat-surface",
+                            "pow": POW_,
+                        },
+                    )
             del _phylo_df, _hw_df, _phylogeny_df
             gc.collect()
 
