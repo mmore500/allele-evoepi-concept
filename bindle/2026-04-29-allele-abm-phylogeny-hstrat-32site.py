@@ -241,14 +241,17 @@ def def_simulate(
                 shape=POP_SIZE, fill_value=0, dtype=xp.uint8
             )
             pathogen_markers = xp.random.randint(
-                low=0, high=2**63, size=POP_SIZE, dtype=xp.int64,
+                low=0,
+                high=2**63,
+                size=POP_SIZE,
+                dtype=xp.int64,
             ).astype(xp.uint64)
-            pathogen_markers |= (
-                xp.random.randint(
-                    low=0, high=2, size=POP_SIZE, dtype=xp.uint64,
-                )
-                << xp.uint64(63)
-            )
+            pathogen_markers |= xp.random.randint(
+                low=0,
+                high=2,
+                size=POP_SIZE,
+                dtype=xp.uint64,
+            ) << xp.uint64(63)
             return (
                 host_statuses,
                 pathogen_genomes,
@@ -292,6 +295,7 @@ def def_simulate(
             return xp.pow(res, pow)
 
         if MUTATION_RATE.size == 1:
+
             def calc_mutation_probabilities(
                 host_immunities: xp.ndarray,
                 pathogen_genomes: xp.ndarray,
@@ -323,7 +327,9 @@ def def_simulate(
                 return (MUTATION_RATE / (b_values - 1.0)) * (
                     xp.exp((b_values - 1.0) * within_host_t) - 1.0
                 )
+
         else:
+
             def calc_mutation_probabilities(
                 host_immunities: xp.ndarray,
                 pathogen_genomes: xp.ndarray,
@@ -436,9 +442,12 @@ def def_simulate(
             if site is None:
                 return pathogen_markers
             new_bits = xp.random.randint(
-                0, 2, size=POP_SIZE, dtype=xp.uint64,
+                0,
+                2,
+                size=POP_SIZE,
+                dtype=xp.uint64,
             )
-            pathogen_markers ^= (new_bits << np.uint64(63 - site))
+            pathogen_markers ^= new_bits << np.uint64(63 - site)
             return pathogen_markers
 
         def update_simulation(
@@ -961,7 +970,13 @@ def def_make_strain_graph_plot(ig, iplotx, np, pathlib, plt, sns, tp):
 
             for ax, (n, edges_dict) in zip(axes, snapshots):
                 edges = list(edges_dict.keys())
-                widths = [edges_dict[e] for e in edges]
+                # 1-hop edges thickest, with progressively thinner widths
+                # for higher-n edges; n>1 edges drawn dashed to distinguish
+                # them from direct mutational neighbors.
+                widths = [3.0 / edges_dict[e] for e in edges]
+                linestyles = [
+                    "-" if edges_dict[e] == 1 else "--" for e in edges
+                ]
 
                 g_plot = ig.Graph(n=n_strains)
                 if edges:
@@ -974,6 +989,7 @@ def def_make_strain_graph_plot(ig, iplotx, np, pathlib, plt, sns, tp):
                     vertex_edgecolor="black",
                     vertex_size=sizes.tolist(),
                     edge_linewidth=widths if widths else 1.0,
+                    edge_linestyle=linestyles if linestyles else "-",
                     edge_color="gray",
                     ax=ax,
                     show=False,
@@ -1053,7 +1069,6 @@ def run_phylogeny_sweep(
     hw_chunks = []
     records_chunks = []
     phylo_chunks = []
-
 
     for _seed in range(1, N_REPLICATES + 1):
         for PHYLO_N_SITES in (2, 3, 4, 8, 16):
