@@ -949,6 +949,14 @@ def def_make_strain_graph_plot(ig, iplotx, np, pathlib, plt, sns, tp):
         max_count = int(counts.max())
         sizes = 4.0 + 18.0 * np.sqrt(counts / max_count)
 
+        # Label only the dominant strains: those carrying more than 10% of
+        # the sampled population, annotated with their Hamming weight.
+        total = int(counts.sum())
+        vertex_labels = [
+            str(int(hamming_weights[i])) if counts[i] > 0.10 * total else ""
+            for i in range(n_strains)
+        ]
+
         # Layout: kamada_kawai on the densest graph (max_n) so vertex
         # positions are stable across subplots.
         ref_graph = ig.Graph(n=n_strains)
@@ -994,6 +1002,9 @@ def def_make_strain_graph_plot(ig, iplotx, np, pathlib, plt, sns, tp):
                     vertex_facecolor=node_facecolors,
                     vertex_edgecolor="black",
                     vertex_size=sizes.tolist(),
+                    vertex_labels=vertex_labels,
+                    vertex_label_color="black",
+                    vertex_label_size=8,
                     edge_linewidth=widths if widths else 1.0,
                     edge_linestyle=linestyles if linestyles else "-",
                     edge_color="gray",
