@@ -987,12 +987,13 @@ def def_make_strain_graph_plot(ig, iplotx, np, pathlib, plt, sns, tp):
                 ax.set_title(f"n = {n}")
                 ax.set_aspect("equal")
 
-            present_hw = sorted(set(int(w) for w in hamming_weights))
-            if len(present_hw) > 6:
+            # Match make_phylogeny_plot's legend: span the same HW limits
+            # (min/max of present Hamming weights), with up to 4
+            # evenly-spaced entries.
+            present_hw = sorted(int(w) for w in set(hamming_weights.tolist()))
+            if len(present_hw) > 4:
                 idx = np.unique(
-                    np.linspace(0, len(present_hw) - 1, 6)
-                    .round()
-                    .astype(int)
+                    np.linspace(0, len(present_hw) - 1, 4).round().astype(int)
                 ).tolist()
                 legend_hw = [present_hw[i] for i in idx]
             else:
