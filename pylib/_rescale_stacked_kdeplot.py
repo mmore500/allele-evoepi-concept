@@ -4,7 +4,6 @@ Each band keeps its linear share of the visual height, so band proportions
 look the same as on the original linear plot, but the overall envelope is
 compressed onto the requested scale (currently only ``"log"``).
 """
-
 from __future__ import annotations
 
 from typing import List, Tuple
