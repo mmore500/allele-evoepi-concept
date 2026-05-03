@@ -48,7 +48,7 @@ def import_pkg():
     from tqdm.auto import tqdm
     from watermark import watermark
 
-    from pylib import draw_scatter_tree
+    from pylib import draw_scatter_tree, strain_palette
 
     return (
         FuncFormatter,
@@ -66,6 +66,7 @@ def import_pkg():
         pl,
         plt,
         sns,
+        strain_palette,
         tp,
         tqdm,
         watermark,
@@ -1061,17 +1062,18 @@ def def_make_strain_graph_plot(ig, iplotx, np, pathlib, plt, sns, tp):
 
 
 @app.cell
-def def_make_strain_curves_plot(np, pathlib, plt, sns, tp):
+def def_make_strain_curves_plot(np, pathlib, plt, sns, strain_palette, tp):
     def make_strain_curves_plot(
         N_SITES: int,
         traj_df,
         strain_df,
-        palette: str = "tab10",
+        palette: str = "husl",
         teeplot_outattrs: dict = {},
     ) -> None:
         """Two-panel stacked figure: top = per-strain population-average
         susceptibility (dashed), bottom = per-strain prevalence (solid).
-        Strains are color-coded; the time axis is shared between panels.
+        Strains are color-coded by Hamming weight (hue) with lightness
+        disambiguating strains that share a Hamming weight.
         """
         n_strains = 1 << N_SITES
         steps = traj_df["Step"].to_numpy()
@@ -1091,7 +1093,7 @@ def def_make_strain_curves_plot(np, pathlib, plt, sns, tp):
                 bit = (s >> site) & 1
                 susc_per_strain[:, s] *= susc_by_site_bit[:, site, bit]
 
-        palette_colors = sns.color_palette(palette, n_strains)
+        palette_colors = strain_palette(N_SITES, base_palette=palette)
 
         with tp.teed(
             plt.subplots,
@@ -1240,7 +1242,7 @@ def run_phylogeny_sweep(
             if SKIP_PLOTTING:
                 print("  (SKIP_PLOTTING=True — skipping strain curves)")
             else:
-                for palette in "tab10", "tab20", "rocket_r":
+                for palette in "husl", "hls", "Set2":
                     make_strain_curves_plot(
                         PHYLO_N_SITES,
                         _phylo_df,
