@@ -40,3 +40,33 @@ def strain_palette(
                 )
                 color_map[strain] = colorsys.hls_to_rgb(h, new_l, saturation)
     return color_map
+
+
+def allele_palette(
+    N_SITES: int,
+    base_palette: str = "husl",
+    lightness_spread: float = 0.4,
+    lightness_floor: float = 0.25,
+    lightness_ceiling: float = 0.85,
+) -> dict:
+    """Map each `(site, allele)` pair to a color.
+
+    Each site gets its own base hue from `base_palette`; the two alleles
+    at that site are split into a darker and lighter variant of the
+    site's hue. Returns a dict keyed by `(site, allele)` tuples with
+    `site` in `range(N_SITES)` and `allele` in `(0, 1)`.
+    """
+    base_colors = sns.color_palette(base_palette, N_SITES)
+    color_map: dict = {}
+    for site in range(N_SITES):
+        h, lightness, saturation = colorsys.rgb_to_hls(*base_colors[site])
+        for allele in (0, 1):
+            offset = (allele - 0.5) * lightness_spread
+            new_l = max(
+                lightness_floor,
+                min(lightness_ceiling, lightness + offset),
+            )
+            color_map[(site, allele)] = colorsys.hls_to_rgb(
+                h, new_l, saturation
+            )
+    return color_map
