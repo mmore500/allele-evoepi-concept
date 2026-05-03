@@ -1296,13 +1296,20 @@ def parse_data(BASICTABLE2_CSV, StringIO, pd):
 def delimit_plot(mo):
     mo.md(
         """
-    ## Strain Prevalence Plot
+    ## Strain Prevalence Plots
 
-    Two-panel layout matching the strain-curves notebook
-    (`2026-05-03-allele-abm-strain-curves.py`): the top panel is reserved
-    for population susceptibility (not provided in `BasicTable2.xlsx`,
-    so this panel is left blank with a note); the bottom panel shows
-    per-strain prevalence over time, color-coded by strain.
+    Per-strain prevalence rendered in two styles, mirroring the
+    Hamming-weight panels of the hstrat phylogeny notebook
+    (`2026-04-29-allele-abm-phylogeny-hstrat-32site.py`):
+
+    1. A stacked count plot (`sns.histplot` with `multiple="stack"`,
+       `element="poly"`), so the band thickness encodes absolute
+       prevalence.
+    2. A filled normalized KDE (`sns.kdeplot` with `multiple="fill"`),
+       so the band thickness encodes the relative composition of the
+       infected population at each time.
+
+    Time runs top-to-bottom (y = -TIME) for parity with the hstrat plot.
     """
     )
     return
@@ -1310,77 +1317,6 @@ def delimit_plot(mo):
 
 @app.cell
 def make_strain_curves_plot(
-    long_df, pathlib, plt, raw_df, sns, strain_cols, tp
-):
-    N_SITES = 2
-    palette_name = "tab10"
-    palette_colors = sns.color_palette(palette_name, len(strain_cols))
-
-    with tp.teed(
-        plt.subplots,
-        nrows=2,
-        ncols=1,
-        figsize=(8, 6),
-        sharex=True,
-        gridspec_kw={"hspace": 0.05},
-        teeplot_outattrs={
-            "a": "strain-curves",
-            "source": "BasicTable2",
-            "n_sites": N_SITES,
-            "palette": palette_name,
-        },
-        teeplot_show=True,
-        teeplot_subdir=pathlib.Path(__file__).stem,
-    ) as (fig, axes):
-        ax_susc, ax_prev = axes
-
-        ax_susc.text(
-            0.5,
-            0.5,
-            "(susceptibility not provided in BasicTable2)",
-            ha="center",
-            va="center",
-            transform=ax_susc.transAxes,
-            fontsize=10,
-            color="gray",
-            style="italic",
-        )
-        ax_susc.set_ylabel("avg susceptibility")
-        ax_susc.set_ylim(0.0, 1.0)
-
-        for s_idx, s in enumerate(strain_cols):
-            ax_prev.plot(
-                raw_df["TIME"].to_numpy(),
-                raw_df[s].to_numpy(),
-                color=palette_colors[s_idx],
-                linestyle="-",
-                linewidth=1.5,
-                label=s,
-            )
-
-        ax_prev.set_ylabel("prevalence")
-        ax_prev.set_xlabel("time")
-        ax_prev.set_ylim(bottom=0.0)
-
-        ax_susc.legend(
-            handles=[
-                plt.Line2D([0], [0], color=palette_colors[i], lw=1.5, label=s)
-                for i, s in enumerate(strain_cols)
-            ],
-            title="strain",
-            loc="center left",
-            bbox_to_anchor=(1.02, 0.5),
-            frameon=False,
-            handletextpad=0.4,
-        )
-        sns.despine(ax=ax_susc)
-        sns.despine(ax=ax_prev)
-
-    return
-
-
-@app.cell
-def make_log_strain_curves_plot(
     long_df,
     pathlib,
     plt,
@@ -1392,44 +1328,112 @@ def make_log_strain_curves_plot(
     N_SITES = 2
     palette_name = "tab10"
     palette_colors = sns.color_palette(palette_name, len(strain_cols))
+    strain_palette_map = {
+        s: palette_colors[i] for i, s in enumerate(strain_cols)
+    }
+
+    plot_df = long_df.assign(y=-long_df["TIME"])
+    plot_df = plot_df[plot_df["prevalence"] > 0]
+
+    binwidth = float(raw_df["TIME"].diff().min())
 
     with tp.teed(
         plt.subplots,
         nrows=1,
-        ncols=1,
-        figsize=(8, 4),
+        ncols=2,
+        figsize=(8, 6),
+        sharey=True,
+        gridspec_kw={"wspace": 0.1},
         teeplot_outattrs={
-            "a": "strain-curves-log",
+            "a": "strain-curves",
             "source": "BasicTable2",
             "n_sites": N_SITES,
             "palette": palette_name,
         },
         teeplot_show=True,
         teeplot_subdir=pathlib.Path(__file__).stem,
-    ) as (fig, ax):
-        for s_idx, s in enumerate(strain_cols):
-            data = raw_df[s].to_numpy()
-            data_pos = data.copy()
-            data_pos[data_pos <= 0] = float("nan")
-            ax.plot(
-                raw_df["TIME"].to_numpy(),
-                data_pos,
-                color=palette_colors[s_idx],
-                linestyle="-",
-                linewidth=1.5,
-                label=s,
+    ) as (fig, axes):
+        ax_strain, ax_kde = axes
+
+        sns.histplot(
+            data=plot_df,
+            y="y",
+            hue="strain",
+            hue_order=strain_cols,
+            weights="prevalence",
+            binwidth=binwidth,
+            multiple="stack",
+            stat="count",
+            element="poly",
+            palette=strain_palette_map,
+            ax=ax_strain,
+            fill=True,
+            linewidth=0,
+            legend=False,
+        )
+        _band_xs = [
+            c.get_paths()[0].vertices[:, 0].max()
+            for c in ax_strain.collections
+            if c.get_paths()
+        ]
+        if _band_xs:
+            _peak = max(_band_xs)
+            _lo, _ = ax_strain.get_xlim()
+            ax_strain.set_xlim(_lo, _peak * 1.05)
+
+        sns.kdeplot(
+            data=plot_df,
+            y="y",
+            hue="strain",
+            hue_order=strain_cols,
+            weights="prevalence",
+            multiple="fill",
+            common_norm=True,
+            cut=0,
+            palette=strain_palette_map,
+            ax=ax_kde,
+            fill=True,
+            linewidth=0,
+            legend=False,
+            bw_adjust=0.5,
+        )
+
+        for ax in (ax_strain, ax_kde):
+            ax.set_xlabel("")
+        ax_kde.set_xlim(0, 1)
+
+        ax_strain.set_ylabel("time")
+        ax_strain.tick_params(left=True, labelleft=True)
+        for ax in (ax_strain, ax_kde):
+            ax.xaxis.tick_top()
+            ax.xaxis.set_label_position("top")
+        ax_kde.tick_params(labelleft=False, left=False)
+
+        sns.despine(ax=ax_strain, left=False, bottom=True, top=False)
+        sns.despine(ax=ax_kde, left=True, bottom=True, top=False)
+
+        ax_strain.set_xlabel("prevalence (stacked)")
+        ax_kde.set_xlabel("composition")
+
+        def _strain_handle(strain):
+            return plt.Line2D(
+                [0],
+                [0],
+                marker="s",
+                color="w",
+                markerfacecolor=strain_palette_map[strain],
+                markersize=10,
+                label=strain,
             )
-        ax.set_yscale("log")
-        ax.set_xlabel("time")
-        ax.set_ylabel("prevalence (log scale)")
-        ax.legend(
+
+        ax_kde.legend(
+            handles=[_strain_handle(s) for s in strain_cols],
             title="strain",
             loc="center left",
             bbox_to_anchor=(1.02, 0.5),
             frameon=False,
             handletextpad=0.4,
         )
-        sns.despine(ax=ax)
 
     return
 
