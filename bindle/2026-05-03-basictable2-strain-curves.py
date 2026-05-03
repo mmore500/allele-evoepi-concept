@@ -21,7 +21,9 @@ def import_pkg():
     from teeplot import teeplot as tp
     from watermark import watermark
 
-    return mo, pd, plt, sns, tp, watermark
+    from pylib import strain_palette
+
+    return mo, pd, plt, sns, strain_palette, tp, watermark
 
 
 @app.cell(hide_code=True)
@@ -1271,8 +1273,6 @@ TIME,J02:1,J03:1,J12:1,J13:1
 
 @app.cell
 def parse_data(BASICTABLE2_CSV, StringIO, pd):
-    # Strain encoding: J{ab}:1 has site-0 allele `a` in {0, 1} and
-    # site-1 allele `b` in {2, 3}; rename to canonical 00/01/10/11.
     column_to_strain = {
         "J02:1": "00",
         "J03:1": "01",
@@ -1309,7 +1309,11 @@ def delimit_plot(mo):
        so the band thickness encodes the relative composition of the
        infected population at each time.
 
-    Time runs top-to-bottom (y = -TIME) for parity with the hstrat plot.
+    Strains are colored by Hamming weight (one ggplot-style HCL hue per
+    weight via `husl`); strains that share a Hamming weight are
+    disambiguated by lightness, so e.g. 01 and 10 read as light/dark
+    variants of the same hue. Time runs top-to-bottom (y = -TIME) for
+    parity with the hstrat plot.
     """
     )
     return
@@ -1323,13 +1327,14 @@ def make_strain_curves_plot(
     raw_df,
     sns,
     strain_cols,
+    strain_palette,
     tp,
 ):
     N_SITES = 2
-    palette_name = "tab10"
-    palette_colors = sns.color_palette(palette_name, len(strain_cols))
+    base_palette = "husl"
+    int_to_color = strain_palette(N_SITES, base_palette=base_palette)
     strain_palette_map = {
-        s: palette_colors[i] for i, s in enumerate(strain_cols)
+        f"{s:0{N_SITES}b}": int_to_color[s] for s in int_to_color
     }
 
     plot_df = long_df.assign(y=-long_df["TIME"])
@@ -1348,7 +1353,7 @@ def make_strain_curves_plot(
             "a": "strain-curves",
             "source": "BasicTable2",
             "n_sites": N_SITES,
-            "palette": palette_name,
+            "palette": base_palette,
         },
         teeplot_show=True,
         teeplot_subdir=pathlib.Path(__file__).stem,
