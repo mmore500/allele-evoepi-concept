@@ -1404,7 +1404,7 @@ def make_strain_curves_plot(
             ax=_ax_strain,
             fill=True,
             linewidth=0,
-            legend=False,
+            legend=True,
         )
         _band_xs = [
             _c.get_paths()[0].vertices[:, 0].max()
@@ -1447,28 +1447,113 @@ def make_strain_curves_plot(
         sns.despine(ax=_ax_strain, left=False, bottom=True, top=False)
         sns.despine(ax=_ax_kde, left=True, bottom=True, top=False)
 
-        _ax_strain.set_xlabel("prevalence (stacked)")
-        _ax_kde.set_xlabel("composition")
+        _ax_strain.set_xlabel("Case Burden")
+        _ax_kde.set_xlabel("Strain Prevalence")
+        _ax_strain.invert_yaxis()
+    return
 
-        def _strain_handle(strain):
-            return plt.Line2D(
-                [0],
-                [0],
-                marker="s",
-                color="w",
-                markerfacecolor=_strain_palette_map[strain],
-                markersize=10,
-                label=strain,
-            )
 
-        _ax_kde.legend(
-            handles=[_strain_handle(s) for s in strain_cols],
-            title="strain",
-            loc="center left",
-            bbox_to_anchor=(1.02, 0.5),
-            frameon=False,
-            handletextpad=0.4,
+@app.cell
+def _(
+    N_SITES,
+    long_df,
+    pathlib,
+    plt,
+    raw_df,
+    sns,
+    strain_cols,
+    strain_palette,
+    tp,
+):
+    _base_palette = "husl"
+    _int_to_color = strain_palette(N_SITES, base_palette=_base_palette)
+    _strain_palette_map = {
+        f"{s:0{N_SITES}b}": _int_to_color[s] for s in _int_to_color
+    }
+
+    _plot_df = long_df.assign(y=long_df["TIME"])
+    _plot_df = _plot_df[_plot_df["prevalence"] > 0]
+
+    _binwidth = float(raw_df["TIME"].diff().min())
+
+    with tp.teed(
+        plt.subplots,
+        nrows=1,
+        ncols=2,
+        figsize=(8, 6),
+        sharey=True,
+        gridspec_kw={"wspace": 0.1},
+        teeplot_outattrs={
+            "a": "strain-curves",
+            "source": "BasicTable2",
+            "n_sites": N_SITES,
+            "palette": "rocket",
+        },
+        teeplot_show=True,
+        teeplot_subdir=pathlib.Path(__file__).stem,
+    ) as (_fig, _axes):
+        _ax_strain, _ax_kde = _axes
+
+        sns.histplot(
+            data=_plot_df,
+            y="y",
+            hue="strain",
+            hue_order=strain_cols,
+            weights="prevalence",
+            binwidth=_binwidth,
+            multiple="stack",
+            stat="count",
+            element="poly",
+            palette="rocket",
+            ax=_ax_strain,
+            fill=True,
+            linewidth=0,
+            legend=True,
         )
+        _band_xs = [
+            _c.get_paths()[0].vertices[:, 0].max()
+            for _c in _ax_strain.collections
+            if _c.get_paths()
+        ]
+        if _band_xs:
+            _peak = max(_band_xs)
+            _lo, _ = _ax_strain.get_xlim()
+            _ax_strain.set_xlim(_lo, _peak * 1.05)
+
+        sns.kdeplot(
+            data=_plot_df,
+            y="y",
+            hue="strain",
+            hue_order=strain_cols,
+            weights="prevalence",
+            multiple="fill",
+            common_norm=True,
+            cut=0,
+            palette="rocket",
+            ax=_ax_kde,
+            fill=True,
+            linewidth=0,
+            legend=False,
+            bw_adjust=0.2,
+        )
+
+        for _ax in (_ax_strain, _ax_kde):
+            _ax.set_xlabel("")
+        _ax_kde.set_xlim(0, 1)
+
+        _ax_strain.set_ylabel("Time")
+        _ax_strain.tick_params(left=True, labelleft=True)
+        for _ax in (_ax_strain, _ax_kde):
+            _ax.xaxis.tick_top()
+            _ax.xaxis.set_label_position("top")
+        _ax_kde.tick_params(labelleft=False, left=False)
+
+        sns.despine(ax=_ax_strain, left=False, bottom=True, top=False)
+        sns.despine(ax=_ax_kde, left=True, bottom=True, top=False)
+
+        _ax_strain.set_xlabel("Case Burden")
+        _ax_kde.set_xlabel("Strain Prevalence")
+        _ax_strain.invert_yaxis()
     return
 
 
