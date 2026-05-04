@@ -76,8 +76,7 @@ def import_pkg():
 
 @app.cell(hide_code=True)
 def do_watermark(mo, watermark):
-    mo.md(
-        f"""
+    mo.md(f"""
     ```Text
     {watermark(
         current_date=True,
@@ -89,8 +88,7 @@ def do_watermark(mo, watermark):
         globals_=globals(),
     )}
     ```
-    """
-    )
+    """)
     return
 
 
@@ -100,9 +98,9 @@ def configure_args(mo):
     # or `marimo export ipynb ... -- --pop-size N ...`). Defaults match the
     # current sweep settings: POP_SIZE=200_000 hosts and N_STEPS=100 steps.
     _args = mo.cli_args()
-    POP_SIZE = int(_args.get("pop-size") or 200_000)
+    POP_SIZE = int(_args.get("pop-size") or 100_000)
     POW = float(_args.get("pow") or 1.0)
-    N_STEPS = int(_args.get("n-steps") or 100)
+    N_STEPS = int(_args.get("n-steps") or 1_200)
     N_REPLICATES = int(_args.get("n-replicates") or 1)
     ENGINE = str(_args.get("engine") or "numpy").lower()
     if ENGINE not in ("numpy", "cupy"):
@@ -1307,7 +1305,7 @@ def run_phylogeny_sweep(
                 CONTACT_RATE=0.35,
                 RECOVERY_RATE=0.1,
                 WANING_RATE=0.01,
-                IMMUNE_STRENGTH=0.95,
+                IMMUNE_STRENGTH=0.7,
                 SEED_COUNT=2,
                 IMMUNITY_FLOOR=0.05,
                 IMMUNITY_CEILING=1.0,
