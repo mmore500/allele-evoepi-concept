@@ -48,11 +48,12 @@ def import_pkg():
     from tqdm.auto import tqdm
     from watermark import watermark
 
-    from pylib import draw_scatter_tree, strain_palette
+    from pylib import allele_palette, draw_scatter_tree, strain_palette
 
     return (
         FuncFormatter,
         MaxNLocator,
+        allele_palette,
         cp,
         draw_scatter_tree,
         dstream,
@@ -1153,6 +1154,106 @@ def def_make_strain_curves_plot(np, pathlib, plt, sns, strain_palette, tp):
 
 
 @app.cell
+def def_make_allele_curves_plot(allele_palette, np, pathlib, plt, sns, tp):
+    def make_allele_curves_plot(
+        N_SITES: int,
+        traj_df,
+        strain_df,
+        palette: str = "husl",
+        teeplot_outattrs: dict = {},
+    ) -> None:
+        """Two-panel stacked figure aggregated by individual allele:
+        top = per-(site, allele) population-average susceptibility
+        (dashed); bottom = per-(site, allele) prevalence (solid). Each
+        site gets its own ggplot-style HCL hue; the two alleles within
+        a site are split by lightness (allele 0 darker, allele 1 lighter).
+        """
+        n_strains = 1 << N_SITES
+        steps = traj_df["Step"].to_numpy()
+
+        # Per-(site, allele) susceptibility comes straight from the
+        # `Susc_S{site}_B{bit}` columns logged by simulate().
+        susc_per_allele = np.empty((len(traj_df), N_SITES, 2), dtype=float)
+        for site in range(N_SITES):
+            for bit in range(2):
+                susc_per_allele[:, site, bit] = traj_df[
+                    f"Susc_S{site}_B{bit}"
+                ].to_numpy()
+
+        # Per-(site, allele) prevalence is the sum of strain prevalences
+        # over strains carrying that allele at that site.
+        unique_steps = sorted(strain_df["Step"].unique())
+        step_to_idx = {t: i for i, t in enumerate(unique_steps)}
+        prev_per_allele = np.zeros(
+            (len(unique_steps), N_SITES, 2), dtype=float
+        )
+        for s in range(n_strains):
+            sub = strain_df[strain_df["strain"] == s]
+            for _, row in sub.iterrows():
+                idx = step_to_idx[row["Step"]]
+                count = float(row["count"])
+                for site in range(N_SITES):
+                    bit = (s >> site) & 1
+                    prev_per_allele[idx, site, bit] += count
+
+        site_allele_to_color = allele_palette(N_SITES, base_palette=palette)
+
+        with tp.teed(
+            plt.subplots,
+            nrows=2,
+            ncols=1,
+            figsize=(8, 6),
+            sharex=True,
+            gridspec_kw={"hspace": 0.05},
+            teeplot_outattrs=teeplot_outattrs,
+            teeplot_show=True,
+            teeplot_subdir=pathlib.Path(__file__).stem,
+        ) as (fig, axes):
+            ax_susc, ax_prev = axes
+
+            for site in range(N_SITES):
+                for allele in (0, 1):
+                    color = site_allele_to_color[(site, allele)]
+                    label = f"S{site}A{allele}"
+                    ax_susc.plot(
+                        steps,
+                        susc_per_allele[:, site, allele],
+                        color=color,
+                        linestyle="--",
+                        linewidth=1.5,
+                        label=label,
+                    )
+                    ax_prev.plot(
+                        unique_steps,
+                        prev_per_allele[:, site, allele],
+                        color=color,
+                        linestyle="-",
+                        linewidth=1.5,
+                        label=label,
+                    )
+
+            ax_susc.set_ylabel("avg susceptibility")
+            ax_susc.set_ylim(0.0, 1.0)
+            ax_prev.set_ylabel("prevalence")
+            ax_prev.set_xlabel("step")
+            ax_prev.set_ylim(bottom=0.0)
+
+            ax_susc.legend(
+                title="site / allele",
+                loc="center left",
+                bbox_to_anchor=(1.02, 0.5),
+                frameon=False,
+                handletextpad=0.4,
+                ncol=1,
+                fontsize=8,
+            )
+            sns.despine(ax=ax_susc)
+            sns.despine(ax=ax_prev)
+
+    return (make_allele_curves_plot,)
+
+
+@app.cell
 def run_phylogeny_sweep(
     ENGINE,
     N_REPLICATES,
@@ -1161,6 +1262,7 @@ def run_phylogeny_sweep(
     POW,
     SKIP_PLOTTING,
     gc,
+    make_allele_curves_plot,
     make_phylogeny_plot,
     make_strain_curves_plot,
     make_strain_graph_plot,
@@ -1250,6 +1352,20 @@ def run_phylogeny_sweep(
                         palette=palette,
                         teeplot_outattrs={
                             "a": "strain-curves",
+                            "n_sites": PHYLO_N_SITES,
+                            "n_steps": int(_phylo_df["Step"].max()) + 1,
+                            "replicate": _seed,
+                            "palette": palette,
+                            "pow": POW_,
+                        },
+                    )
+                    make_allele_curves_plot(
+                        PHYLO_N_SITES,
+                        _phylo_df,
+                        _strain_df,
+                        palette=palette,
+                        teeplot_outattrs={
+                            "a": "allele-curves",
                             "n_sites": PHYLO_N_SITES,
                             "n_steps": int(_phylo_df["Step"].max()) + 1,
                             "replicate": _seed,
