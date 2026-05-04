@@ -76,8 +76,7 @@ def import_pkg():
 
 @app.cell(hide_code=True)
 def do_watermark(mo, watermark):
-    mo.md(
-        f"""
+    mo.md(f"""
     ```Text
     {watermark(
         current_date=True,
@@ -89,8 +88,7 @@ def do_watermark(mo, watermark):
         globals_=globals(),
     )}
     ```
-    """
-    )
+    """)
     return
 
 
@@ -100,9 +98,9 @@ def configure_args(mo):
     # or `marimo export ipynb ... -- --pop-size N ...`). Defaults match the
     # current sweep settings: POP_SIZE=200_000 hosts and N_STEPS=100 steps.
     _args = mo.cli_args()
-    POP_SIZE = int(_args.get("pop-size") or 200_000)
+    POP_SIZE = int(_args.get("pop-size") or 100_000)
     POW = float(_args.get("pow") or 1.0)
-    N_STEPS = int(_args.get("n-steps") or 100)
+    N_STEPS = int(_args.get("n-steps") or 1_200)
     N_REPLICATES = int(_args.get("n-replicates") or 1)
     ENGINE = str(_args.get("engine") or "numpy").lower()
     if ENGINE not in ("numpy", "cupy"):
@@ -115,7 +113,7 @@ def configure_args(mo):
         f"N_REPLICATES={N_REPLICATES} ENGINE={ENGINE} "
         f"SKIP_PLOTTING={SKIP_PLOTTING}",
     )
-    return ENGINE, N_REPLICATES, N_STEPS, POP_SIZE, SKIP_PLOTTING, POW
+    return ENGINE, N_REPLICATES, N_STEPS, POP_SIZE, POW, SKIP_PLOTTING
 
 
 @app.cell
@@ -129,8 +127,7 @@ def configure_backend(ENGINE, cp, np):
 
 @app.cell(hide_code=True)
 def delimit_simulation(mo):
-    mo.md(
-        """
+    mo.md("""
     ## Simulation Implementation
 
     This notebook is a small-genome companion to
@@ -154,8 +151,7 @@ def delimit_simulation(mo):
 
     The vectorized deposit pattern is adapted from
     https://github.com/mmore500/hstrat-synthesis (see `pylib/track_ca.py`).
-    """
-    )
+    """)
     return
 
 
@@ -655,8 +651,7 @@ def def_simulate(
 
 @app.cell(hide_code=True)
 def delimit_reconstruct(mo):
-    mo.md(
-        """
+    mo.md("""
     ## Surface-Annotation Reconstruction
 
     Given the snapshot records emitted by `simulate(..., track_phylogeny=
@@ -664,8 +659,7 @@ def delimit_reconstruct(mo):
     `hstrat.dataframe.surface_postprocess_trie` to estimate the phylogenetic
     tree. We use `AssignOriginTimeNodeRankTriePostprocessor(t0="dstream_S")`
     so that origin times line up with simulation step numbers.
-    """
-    )
+    """)
     return
 
 
@@ -698,14 +692,12 @@ def def_reconstruct_phylogeny(gc, hstrat, pd, pl):
 
 @app.cell(hide_code=True)
 def delimit_phylogeny(mo):
-    mo.md(
-        """
+    mo.md("""
     ## Surface-Reconstructed Phylogeny
 
     Sweep `N_SITES` over a few values and render the surface-reconstructed
     phylogeny next to the absolute-prevalence and Hamming-weight stackplots.
-    """
-    )
+    """)
     return
 
 
@@ -1265,8 +1257,8 @@ def run_phylogeny_sweep(
     N_REPLICATES,
     N_STEPS,
     POP_SIZE,
-    SKIP_PLOTTING,
     POW,
+    SKIP_PLOTTING,
     gc,
     make_allele_curves_plot,
     make_phylogeny_plot,
@@ -1313,7 +1305,7 @@ def run_phylogeny_sweep(
                 CONTACT_RATE=0.35,
                 RECOVERY_RATE=0.1,
                 WANING_RATE=0.01,
-                IMMUNE_STRENGTH=0.95,
+                IMMUNE_STRENGTH=0.7,
                 SEED_COUNT=2,
                 IMMUNITY_FLOOR=0.05,
                 IMMUNITY_CEILING=1.0,
