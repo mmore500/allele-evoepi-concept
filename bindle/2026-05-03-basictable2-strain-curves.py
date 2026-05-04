@@ -28,8 +28,7 @@ def import_pkg():
 
 @app.cell(hide_code=True)
 def do_watermark(mo, watermark):
-    mo.md(
-        f"""
+    mo.md(f"""
     ```Text
     {watermark(
         current_date=True,
@@ -41,8 +40,7 @@ def do_watermark(mo, watermark):
         globals_=globals(),
     )}
     ```
-    """
-    )
+    """)
     return
 
 
@@ -1392,7 +1390,7 @@ def make_strain_curves_plot(
 
         sns.histplot(
             data=_plot_df,
-            y="y",
+            y="TIME",
             hue="strain",
             hue_order=strain_cols,
             weights="prevalence",
@@ -1418,7 +1416,7 @@ def make_strain_curves_plot(
 
         sns.kdeplot(
             data=_plot_df,
-            y="y",
+            y="TIME",
             hue="strain",
             hue_order=strain_cols,
             weights="prevalence",
