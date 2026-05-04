@@ -1130,10 +1130,10 @@ def def_make_strain_curves_plot(np, pathlib, plt, sns, strain_palette, tp):
                     label=label,
                 )
 
-            ax_susc.set_ylabel("avg susceptibility")
+            ax_susc.set_ylabel("Population Susceptibility")
             ax_susc.set_ylim(0.0, 1.0)
-            ax_prev.set_ylabel("prevalence")
-            ax_prev.set_xlabel("step")
+            ax_prev.set_ylabel("Case Burden")
+            ax_prev.set_xlabel("Time")
             ax_prev.set_ylim(bottom=0.0)
 
             ax_susc.legend(
@@ -1230,10 +1230,10 @@ def def_make_allele_curves_plot(allele_palette, np, pathlib, plt, sns, tp):
                         label=label,
                     )
 
-            ax_susc.set_ylabel("avg susceptibility")
+            ax_susc.set_ylabel("Population Susceptibility")
             ax_susc.set_ylim(0.0, 1.0)
-            ax_prev.set_ylabel("prevalence")
-            ax_prev.set_xlabel("step")
+            ax_prev.set_ylabel("Case Burden")
+            ax_prev.set_xlabel("Time")
             ax_prev.set_ylim(bottom=0.0)
 
             ax_susc.legend(
