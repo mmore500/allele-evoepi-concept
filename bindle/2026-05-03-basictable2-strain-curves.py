@@ -21,9 +21,18 @@ def import_pkg():
     from teeplot import teeplot as tp
     from watermark import watermark
 
-    from pylib import strain_palette
+    from pylib import allele_palette, strain_palette
 
-    return mo, pd, plt, sns, strain_palette, tp, watermark
+    return (
+        allele_palette,
+        mo,
+        pd,
+        plt,
+        sns,
+        strain_palette,
+        tp,
+        watermark,
+    )
 
 
 @app.cell(hide_code=True)
@@ -1272,6 +1281,12 @@ TIME,J02:1,J03:1,J12:1,J13:1
 
 
 @app.cell
+def def_n_sites():
+    N_SITES = 2
+    return (N_SITES,)
+
+
+@app.cell
 def parse_data(BASICTABLE2_CSV, StringIO, pd):
     column_to_strain = {
         "J02:1": "00",
@@ -1290,6 +1305,34 @@ def parse_data(BASICTABLE2_CSV, StringIO, pd):
     )
     print(f"loaded {len(raw_df)} time steps, {len(strain_cols)} strains")
     return long_df, raw_df, strain_cols
+
+
+@app.cell
+def compute_allele_prevalence(N_SITES, pd, raw_df, strain_cols):
+    allele_records = []
+    for site in range(N_SITES):
+        for allele in (0, 1):
+            matching = [s for s in strain_cols if int(s[site]) == allele]
+            allele_prev = raw_df[matching].sum(axis=1)
+            for time, prev in zip(raw_df["TIME"], allele_prev):
+                allele_records.append(
+                    {
+                        "TIME": float(time),
+                        "site": site,
+                        "allele": allele,
+                        "label": f"S{site}A{allele}",
+                        "prevalence": float(prev),
+                    }
+                )
+    allele_long_df = pd.DataFrame(allele_records)
+    allele_labels = [
+        f"S{site}A{allele}" for site in range(N_SITES) for allele in (0, 1)
+    ]
+    print(
+        f"computed per-allele prevalence: "
+        f"{N_SITES} sites x 2 alleles = {len(allele_labels)} entries",
+    )
+    return allele_labels, allele_long_df
 
 
 @app.cell(hide_code=True)
@@ -1321,6 +1364,7 @@ def delimit_plot(mo):
 
 @app.cell
 def make_strain_curves_plot(
+    N_SITES,
     long_df,
     pathlib,
     plt,
@@ -1330,17 +1374,16 @@ def make_strain_curves_plot(
     strain_palette,
     tp,
 ):
-    N_SITES = 2
-    base_palette = "husl"
-    int_to_color = strain_palette(N_SITES, base_palette=base_palette)
-    strain_palette_map = {
-        f"{s:0{N_SITES}b}": int_to_color[s] for s in int_to_color
+    _base_palette = "husl"
+    _int_to_color = strain_palette(N_SITES, base_palette=_base_palette)
+    _strain_palette_map = {
+        f"{s:0{N_SITES}b}": _int_to_color[s] for s in _int_to_color
     }
 
-    plot_df = long_df.assign(y=-long_df["TIME"])
-    plot_df = plot_df[plot_df["prevalence"] > 0]
+    _plot_df = long_df.assign(y=-long_df["TIME"])
+    _plot_df = _plot_df[_plot_df["prevalence"] > 0]
 
-    binwidth = float(raw_df["TIME"].diff().min())
+    _binwidth = float(raw_df["TIME"].diff().min())
 
     with tp.teed(
         plt.subplots,
@@ -1353,41 +1396,41 @@ def make_strain_curves_plot(
             "a": "strain-curves",
             "source": "BasicTable2",
             "n_sites": N_SITES,
-            "palette": base_palette,
+            "palette": _base_palette,
         },
         teeplot_show=True,
         teeplot_subdir=pathlib.Path(__file__).stem,
-    ) as (fig, axes):
-        ax_strain, ax_kde = axes
+    ) as (_fig, _axes):
+        _ax_strain, _ax_kde = _axes
 
         sns.histplot(
-            data=plot_df,
+            data=_plot_df,
             y="y",
             hue="strain",
             hue_order=strain_cols,
             weights="prevalence",
-            binwidth=binwidth,
+            binwidth=_binwidth,
             multiple="stack",
             stat="count",
             element="poly",
-            palette=strain_palette_map,
-            ax=ax_strain,
+            palette=_strain_palette_map,
+            ax=_ax_strain,
             fill=True,
             linewidth=0,
             legend=False,
         )
         _band_xs = [
-            c.get_paths()[0].vertices[:, 0].max()
-            for c in ax_strain.collections
-            if c.get_paths()
+            _c.get_paths()[0].vertices[:, 0].max()
+            for _c in _ax_strain.collections
+            if _c.get_paths()
         ]
         if _band_xs:
             _peak = max(_band_xs)
-            _lo, _ = ax_strain.get_xlim()
-            ax_strain.set_xlim(_lo, _peak * 1.05)
+            _lo, _ = _ax_strain.get_xlim()
+            _ax_strain.set_xlim(_lo, _peak * 1.05)
 
         sns.kdeplot(
-            data=plot_df,
+            data=_plot_df,
             y="y",
             hue="strain",
             hue_order=strain_cols,
@@ -1395,30 +1438,30 @@ def make_strain_curves_plot(
             multiple="fill",
             common_norm=True,
             cut=0,
-            palette=strain_palette_map,
-            ax=ax_kde,
+            palette=_strain_palette_map,
+            ax=_ax_kde,
             fill=True,
             linewidth=0,
             legend=False,
             bw_adjust=0.5,
         )
 
-        for ax in (ax_strain, ax_kde):
-            ax.set_xlabel("")
-        ax_kde.set_xlim(0, 1)
+        for _ax in (_ax_strain, _ax_kde):
+            _ax.set_xlabel("")
+        _ax_kde.set_xlim(0, 1)
 
-        ax_strain.set_ylabel("time")
-        ax_strain.tick_params(left=True, labelleft=True)
-        for ax in (ax_strain, ax_kde):
-            ax.xaxis.tick_top()
-            ax.xaxis.set_label_position("top")
-        ax_kde.tick_params(labelleft=False, left=False)
+        _ax_strain.set_ylabel("time")
+        _ax_strain.tick_params(left=True, labelleft=True)
+        for _ax in (_ax_strain, _ax_kde):
+            _ax.xaxis.tick_top()
+            _ax.xaxis.set_label_position("top")
+        _ax_kde.tick_params(labelleft=False, left=False)
 
-        sns.despine(ax=ax_strain, left=False, bottom=True, top=False)
-        sns.despine(ax=ax_kde, left=True, bottom=True, top=False)
+        sns.despine(ax=_ax_strain, left=False, bottom=True, top=False)
+        sns.despine(ax=_ax_kde, left=True, bottom=True, top=False)
 
-        ax_strain.set_xlabel("prevalence (stacked)")
-        ax_kde.set_xlabel("composition")
+        _ax_strain.set_xlabel("prevalence (stacked)")
+        _ax_kde.set_xlabel("composition")
 
         def _strain_handle(strain):
             return plt.Line2D(
@@ -1426,12 +1469,12 @@ def make_strain_curves_plot(
                 [0],
                 marker="s",
                 color="w",
-                markerfacecolor=strain_palette_map[strain],
+                markerfacecolor=_strain_palette_map[strain],
                 markersize=10,
                 label=strain,
             )
 
-        ax_kde.legend(
+        _ax_kde.legend(
             handles=[_strain_handle(s) for s in strain_cols],
             title="strain",
             loc="center left",
@@ -1439,6 +1482,335 @@ def make_strain_curves_plot(
             frameon=False,
             handletextpad=0.4,
         )
+
+    return
+
+
+@app.cell(hide_code=True)
+def delimit_allele_plot(mo):
+    mo.md(
+        """
+    ## Per-Allele Prevalence Plots
+
+    Same stacked-histplot + filled-KDE pair as the per-strain plot, but
+    aggregated by individual allele: at each time, the prevalence of
+    "site `s`, allele `a`" is the sum of strain prevalences over the
+    two strains carrying allele `a` at site `s`. Each site gets its own
+    hue (ggplot-style HCL via `husl`); the two alleles within a site
+    are distinguished by lightness (allele 0 darker, allele 1 lighter).
+
+    `BasicTable2.xlsx` does not provide per-allele susceptibility, so
+    only prevalence is rendered here.
+    """
+    )
+    return
+
+
+@app.cell
+def make_allele_curves_plot(
+    N_SITES,
+    allele_labels,
+    allele_long_df,
+    allele_palette,
+    pathlib,
+    plt,
+    raw_df,
+    sns,
+    tp,
+):
+    _base_palette = "husl"
+    _site_allele_to_color = allele_palette(N_SITES, base_palette=_base_palette)
+    _allele_palette_map = {
+        f"S{site}A{allele}": _site_allele_to_color[(site, allele)]
+        for site in range(N_SITES)
+        for allele in (0, 1)
+    }
+
+    _plot_df = allele_long_df.assign(y=-allele_long_df["TIME"])
+    _plot_df = _plot_df[_plot_df["prevalence"] > 0]
+    _binwidth = float(raw_df["TIME"].diff().min())
+
+    with tp.teed(
+        plt.subplots,
+        nrows=1,
+        ncols=2,
+        figsize=(8, 6),
+        sharey=True,
+        gridspec_kw={"wspace": 0.1},
+        teeplot_outattrs={
+            "a": "allele-curves",
+            "source": "BasicTable2",
+            "n_sites": N_SITES,
+            "palette": _base_palette,
+        },
+        teeplot_show=True,
+        teeplot_subdir=pathlib.Path(__file__).stem,
+    ) as (_fig, _axes):
+        _ax_count, _ax_kde = _axes
+
+        sns.histplot(
+            data=_plot_df,
+            y="y",
+            hue="label",
+            hue_order=allele_labels,
+            weights="prevalence",
+            binwidth=_binwidth,
+            multiple="stack",
+            stat="count",
+            element="poly",
+            palette=_allele_palette_map,
+            ax=_ax_count,
+            fill=True,
+            linewidth=0,
+            legend=False,
+        )
+
+        sns.kdeplot(
+            data=_plot_df,
+            y="y",
+            hue="label",
+            hue_order=allele_labels,
+            weights="prevalence",
+            multiple="fill",
+            common_norm=True,
+            cut=0,
+            palette=_allele_palette_map,
+            ax=_ax_kde,
+            fill=True,
+            linewidth=0,
+            legend=False,
+            bw_adjust=0.5,
+        )
+
+        for _ax in (_ax_count, _ax_kde):
+            _ax.set_xlabel("")
+        _ax_kde.set_xlim(0, 1)
+
+        _ax_count.set_ylabel("time")
+        _ax_count.tick_params(left=True, labelleft=True)
+        for _ax in (_ax_count, _ax_kde):
+            _ax.xaxis.tick_top()
+            _ax.xaxis.set_label_position("top")
+        _ax_kde.tick_params(labelleft=False, left=False)
+
+        sns.despine(ax=_ax_count, left=False, bottom=True, top=False)
+        sns.despine(ax=_ax_kde, left=True, bottom=True, top=False)
+
+        _ax_count.set_xlabel("prevalence (stacked)")
+        _ax_kde.set_xlabel("composition")
+
+        def _allele_handle(label):
+            return plt.Line2D(
+                [0],
+                [0],
+                marker="s",
+                color="w",
+                markerfacecolor=_allele_palette_map[label],
+                markersize=10,
+                label=label,
+            )
+
+        _ax_kde.legend(
+            handles=[_allele_handle(label) for label in allele_labels],
+            title="site / allele",
+            loc="center left",
+            bbox_to_anchor=(1.02, 0.5),
+            frameon=False,
+            handletextpad=0.4,
+        )
+
+    return
+
+
+@app.cell(hide_code=True)
+def delimit_twiny_plot(mo):
+    mo.md(
+        """
+    ## Twiny Line-Plot Variants
+
+    Two-panel figure (vertically stacked, sharing the time x-axis) for
+    each grouping: top panel reserved for population susceptibility
+    (`BasicTable2.xlsx` does not provide it, so the panel is left blank
+    with a note); bottom panel renders the prevalence curves as solid
+    lines. Susceptibilities would be drawn dashed in the same color as
+    their matching prevalence curves once data becomes available.
+    """
+    )
+    return
+
+
+@app.cell
+def make_strain_twiny_plot(
+    N_SITES,
+    pathlib,
+    plt,
+    raw_df,
+    sns,
+    strain_cols,
+    strain_palette,
+    tp,
+):
+    _base_palette = "husl"
+    _int_to_color = strain_palette(N_SITES, base_palette=_base_palette)
+    _strain_palette_map_t = {
+        f"{s:0{N_SITES}b}": _int_to_color[s] for s in _int_to_color
+    }
+
+    with tp.teed(
+        plt.subplots,
+        nrows=2,
+        ncols=1,
+        figsize=(8, 6),
+        sharex=True,
+        gridspec_kw={"hspace": 0.05},
+        teeplot_outattrs={
+            "a": "strain-twiny",
+            "source": "BasicTable2",
+            "n_sites": N_SITES,
+            "palette": _base_palette,
+        },
+        teeplot_show=True,
+        teeplot_subdir=pathlib.Path(__file__).stem,
+    ) as (_fig, _axes):
+        _ax_susc, _ax_prev = _axes
+
+        _ax_susc.text(
+            0.5,
+            0.5,
+            "(susceptibility not provided in BasicTable2)",
+            ha="center",
+            va="center",
+            transform=_ax_susc.transAxes,
+            fontsize=10,
+            color="gray",
+            style="italic",
+        )
+        _ax_susc.set_ylabel("avg susceptibility")
+        _ax_susc.set_ylim(0.0, 1.0)
+
+        for _s in strain_cols:
+            _ax_prev.plot(
+                raw_df["TIME"].to_numpy(),
+                raw_df[_s].to_numpy(),
+                color=_strain_palette_map_t[_s],
+                linestyle="-",
+                linewidth=1.5,
+                label=_s,
+            )
+
+        _ax_prev.set_ylabel("prevalence")
+        _ax_prev.set_xlabel("time")
+        _ax_prev.set_ylim(bottom=0.0)
+
+        _ax_susc.legend(
+            handles=[
+                plt.Line2D(
+                    [0],
+                    [0],
+                    color=_strain_palette_map_t[_s],
+                    lw=1.5,
+                    label=_s,
+                )
+                for _s in strain_cols
+            ],
+            title="strain",
+            loc="center left",
+            bbox_to_anchor=(1.02, 0.5),
+            frameon=False,
+            handletextpad=0.4,
+        )
+        sns.despine(ax=_ax_susc)
+        sns.despine(ax=_ax_prev)
+
+    return
+
+
+@app.cell
+def make_allele_twiny_plot(
+    N_SITES,
+    allele_labels,
+    allele_long_df,
+    allele_palette,
+    pathlib,
+    plt,
+    sns,
+    tp,
+):
+    _base_palette = "husl"
+    _site_allele_to_color = allele_palette(N_SITES, base_palette=_base_palette)
+    _allele_palette_map_t = {
+        f"S{site}A{allele}": _site_allele_to_color[(site, allele)]
+        for site in range(N_SITES)
+        for allele in (0, 1)
+    }
+
+    with tp.teed(
+        plt.subplots,
+        nrows=2,
+        ncols=1,
+        figsize=(8, 6),
+        sharex=True,
+        gridspec_kw={"hspace": 0.05},
+        teeplot_outattrs={
+            "a": "allele-twiny",
+            "source": "BasicTable2",
+            "n_sites": N_SITES,
+            "palette": _base_palette,
+        },
+        teeplot_show=True,
+        teeplot_subdir=pathlib.Path(__file__).stem,
+    ) as (_fig, _axes):
+        _ax_susc, _ax_prev = _axes
+
+        _ax_susc.text(
+            0.5,
+            0.5,
+            "(susceptibility not provided in BasicTable2)",
+            ha="center",
+            va="center",
+            transform=_ax_susc.transAxes,
+            fontsize=10,
+            color="gray",
+            style="italic",
+        )
+        _ax_susc.set_ylabel("avg susceptibility")
+        _ax_susc.set_ylim(0.0, 1.0)
+
+        for _label in allele_labels:
+            _sub = allele_long_df[allele_long_df["label"] == _label]
+            _sub = _sub.sort_values("TIME")
+            _ax_prev.plot(
+                _sub["TIME"].to_numpy(),
+                _sub["prevalence"].to_numpy(),
+                color=_allele_palette_map_t[_label],
+                linestyle="-",
+                linewidth=1.5,
+                label=_label,
+            )
+
+        _ax_prev.set_ylabel("prevalence")
+        _ax_prev.set_xlabel("time")
+        _ax_prev.set_ylim(bottom=0.0)
+
+        _ax_susc.legend(
+            handles=[
+                plt.Line2D(
+                    [0],
+                    [0],
+                    color=_allele_palette_map_t[_label],
+                    lw=1.5,
+                    label=_label,
+                )
+                for _label in allele_labels
+            ],
+            title="site / allele",
+            loc="center left",
+            bbox_to_anchor=(1.02, 0.5),
+            frameon=False,
+            handletextpad=0.4,
+        )
+        sns.despine(ax=_ax_susc)
+        sns.despine(ax=_ax_prev)
 
     return
 
