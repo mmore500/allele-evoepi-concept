@@ -28,8 +28,7 @@ def import_pkg():
 
 @app.cell(hide_code=True)
 def do_watermark(mo, watermark):
-    mo.md(
-        f"""
+    mo.md(f"""
     ```Text
     {watermark(
         current_date=True,
@@ -41,15 +40,13 @@ def do_watermark(mo, watermark):
         globals_=globals(),
     )}
     ```
-    """
-    )
+    """)
     return
 
 
 @app.cell(hide_code=True)
 def delimit_data(mo):
-    mo.md(
-        """
+    mo.md("""
     ## Data
 
     Hardcoded copy of `BasicTable2.xlsx` (basic 2-site model from the
@@ -57,8 +54,7 @@ def delimit_data(mo):
     population-fraction prevalence of the strain with site-0 allele `a`
     (in `{0, 1}`) and site-1 allele `b` (in `{2, 3}`); columns have been
     reordered so that strain labels read 00, 01, 10, 11 left to right.
-    """
-    )
+    """)
     return
 
 
@@ -1328,8 +1324,7 @@ def compute_allele_prevalence(N_SITES, pd, raw_df, strain_cols):
 
 @app.cell(hide_code=True)
 def delimit_plot(mo):
-    mo.md(
-        """
+    mo.md("""
     ## Strain Prevalence Plots
 
     Per-strain prevalence rendered in two styles, mirroring the
@@ -1348,8 +1343,7 @@ def delimit_plot(mo):
     disambiguated by lightness, so e.g. 01 and 10 read as light/dark
     variants of the same hue. Time runs top-to-bottom (y = -TIME) for
     parity with the hstrat plot.
-    """
-    )
+    """)
     return
 
 
@@ -1396,7 +1390,7 @@ def make_strain_curves_plot(
 
         sns.histplot(
             data=_plot_df,
-            y="y",
+            y="TIME",
             hue="strain",
             hue_order=strain_cols,
             weights="prevalence",
@@ -1422,7 +1416,7 @@ def make_strain_curves_plot(
 
         sns.kdeplot(
             data=_plot_df,
-            y="y",
+            y="TIME",
             hue="strain",
             hue_order=strain_cols,
             weights="prevalence",
@@ -1565,8 +1559,7 @@ def _(
 
 @app.cell(hide_code=True)
 def delimit_allele_plot(mo):
-    mo.md(
-        """
+    mo.md("""
     ## Per-Allele Prevalence Plots
 
     Same stacked-histplot + filled-KDE pair as the per-strain plot, but
@@ -1578,8 +1571,7 @@ def delimit_allele_plot(mo):
 
     `BasicTable2.xlsx` does not provide per-allele susceptibility, so
     only prevalence is rendered here.
-    """
-    )
+    """)
     return
 
 
@@ -1700,8 +1692,7 @@ def make_allele_curves_plot(
 
 @app.cell(hide_code=True)
 def delimit_twiny_plot(mo):
-    mo.md(
-        """
+    mo.md("""
     ## Twiny Line-Plot Variants
 
     Two-panel figure (vertically stacked, sharing the time x-axis) for
@@ -1710,8 +1701,7 @@ def delimit_twiny_plot(mo):
     with a note); bottom panel renders the prevalence curves as solid
     lines. Susceptibilities would be drawn dashed in the same color as
     their matching prevalence curves once data becomes available.
-    """
-    )
+    """)
     return
 
 
