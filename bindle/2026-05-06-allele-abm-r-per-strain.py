@@ -140,32 +140,35 @@ def delimit_simulation(mo):
     individual strain (the strain count is `2**N_SITES`, capped here
     at 16). In addition to the phylogeny-and-strain-network plots
     inherited from the 32-site notebook, this notebook renders an
-    "r-curves" figure: a multi-row stack (one row per smoothing
-    window, unsmoothed at the top) plotting both *actual* and
-    *theoretical* per-strain reproduction numbers, defined per step
-    (rather than per infectious period) so that they can be compared
-    apples-to-apples against directly-observed transmission events:
+    "r-curves" figure: a multi-row stack with the *theoretical* per-
+    strain reproduction number on the very top row by itself, and
+    the *actual* per-strain reproduction number on subsequent rows
+    at increasing smoothing windows (unsmoothed first). Both are
+    scaled by the expected infectious period `1 / RECOVERY_RATE` so
+    the plotted values are total expected new infections per
+    infected over an infection (i.e. an `R0`-like quantity) rather
+    than the per-step rate, and `R = 1` is drawn as the
+    epidemic-threshold reference line.
 
-    * `R_actual(t, s) = new_infections(s, t) / n_with_strain(s, t)` --
-      the number of new strain-`s` infections caused per current
-      strain-`s` infected per step, computed from instrumentation
+    * `R_actual(t, s) = new_infections(s, t) / n_with_strain(s, t) /
+      RECOVERY_RATE` -- the number of new strain-`s` infections
+      caused per current strain-`s` infected per step, multiplied by
+      the expected infectious period, computed from instrumentation
       logged inside `simulate()`. `new_infections` is captured
       pre-mutation in `update_simulation()` so the strain label
       reflects the strain that actually transmitted, not its
       post-mutation descendant.
 
-    * `R_theo(t, s)` -- the average over the population of the
-      probability that strain `s` infects a randomly-sampled
+    * `R_theo(t, s) = R_theo_per_step(s, t) / RECOVERY_RATE`, where
+      `R_theo_per_step(s, t)` is the average over the population of
+      the probability that strain `s` infects a randomly-sampled
       individual on a single contact in one step (infected hosts
-      contribute zero since they cannot be re-infected), so
-      `R_theo(s, t) * n_with_strain(s, t)` is the expected number of
-      new strain-`s` infections per step. This is logged per step as
-      `strain_df["theoretical_R"]` alongside `count` and
-      `new_infections`.
-
-    Both are plotted as line curves color-coded by strain; actual is
-    rolling-mean smoothed with the row's window, theoretical is left
-    unsmoothed (it is already a smooth function of population state).
+      contribute zero since they cannot be re-infected). The per-
+      step quantity is logged as `strain_df["theoretical_R"]`
+      alongside `count` and `new_infections`; multiplying by the
+      expected infectious period gives the analog of `R0` (so
+      `R_theo(s, t) * n_with_strain(s, t) * RECOVERY_RATE` is the
+      expected number of new strain-`s` infections per step).
 
     Phylogeny estimation still uses *hereditary stratigraphic surface*
     annotations (see https://hstrat.rtfd.io). Each infected host carries
@@ -1342,30 +1345,36 @@ def def_make_r_curves_plot(np, pathlib, pd, plt, sns, strain_palette, tp):
     def make_r_curves_plot(
         N_SITES: int,
         strain_df,
+        RECOVERY_RATE: float,
         smoothing_windows=(1, 5, 25, 125),
         palette: str = "husl",
         teeplot_outattrs: dict = {},
     ) -> None:
-        """Multi-row figure of per-strain reproduction number, one row
-        per smoothing window (unsmoothed at the top). In each row,
-        actual R(t, s) = new_infections(s, t) / n_with_strain(s, t)
-        (solid; computed directly from the per-step instrumentation
-        logged in `strain_df`: `new_infections` is the population
-        fraction newly infected with strain s in the step, captured
-        pre-mutation, and `count` is the population fraction currently
-        infected with strain s) is overlaid with theoretical R(t, s)
-        (dashed; logged per step as `theoretical_R`, equal to the
-        average over the population of P(strain s infects a randomly-
-        sampled individual on a single contact in one step), with
-        infected hosts contributing 0 since they cannot be re-infected
-        --- so theoretical_R(s, t) * n_with_strain(s, t) is the
-        expected number of new strain-s infections per step). The
-        actual R is rolling-mean smoothed with the row's window;
-        theoretical R is plotted unsmoothed (it is already a smooth
-        function of population state). Strains are color-coded by
-        Hamming weight (hue) with lightness disambiguating strains of
-        the same weight. The first row's window is always 1 (no
-        smoothing).
+        """Multi-row figure of per-strain reproduction number. The
+        first row plots the *theoretical* R per strain on its own,
+        and each subsequent row plots the *actual* R per strain at a
+        different smoothing window (unsmoothed first). Both are
+        scaled by the expected infectious period `1 / RECOVERY_RATE`
+        so the plotted values are total expected new infections per
+        infected over an infection (an `R0`-like quantity), not the
+        per-step rate.
+
+        * actual R(t, s) = (new_infections(s, t) / n_with_strain(s, t))
+          * (1 / RECOVERY_RATE) -- new strain-s infections per current
+          strain-s infected per step, multiplied by the expected
+          infectious period in steps. Rolling-mean smoothed with the
+          row's window.
+        * theoretical R(t, s) = theoretical_R_per_step(s, t) *
+          (1 / RECOVERY_RATE) where the per-step quantity is the
+          population-average probability that strain s infects a
+          randomly-sampled individual on a single contact in one step
+          (logged per step as `strain_df["theoretical_R"]`, with
+          infected hosts contributing 0). Plotted unsmoothed since it
+          is already a smooth function of population state.
+
+        Strains are color-coded by Hamming weight (hue) with
+        lightness disambiguating strains of the same weight. The
+        epidemic threshold R = 1 is drawn as a dotted reference line.
         """
         n_strains = 1 << N_SITES
 
@@ -1386,12 +1395,17 @@ def def_make_r_curves_plot(np, pathlib, pd, plt, sns, strain_palette, tp):
             new_inf_per_strain[i, s] = float(row.get("new_infections", 0.0))
             theo_R_per_strain[i, s] = float(row.get("theoretical_R", 0.0))
 
+        # Convert per-step rates to per-infectious-period totals.
+        infectious_period = 1.0 / RECOVERY_RATE
+        theo_R_per_strain = theo_R_per_strain * infectious_period
+
         with np.errstate(divide="ignore", invalid="ignore"):
             r_actual_per_strain = np.where(
                 prev_per_strain > 0,
                 new_inf_per_strain / prev_per_strain,
                 np.nan,
             )
+        r_actual_per_strain = r_actual_per_strain * infectious_period
 
         palette_colors = strain_palette(N_SITES, base_palette=palette)
 
@@ -1399,24 +1413,56 @@ def def_make_r_curves_plot(np, pathlib, pd, plt, sns, strain_palette, tp):
         if not windows or windows[0] != 1:
             windows = [1] + windows
 
+        n_rows = 1 + len(windows)
+
         with tp.teed(
             plt.subplots,
-            nrows=len(windows),
+            nrows=n_rows,
             ncols=1,
-            figsize=(8, 2.0 * len(windows) + 1.0),
+            figsize=(8, 2.0 * n_rows + 1.0),
             sharex=True,
             gridspec_kw={"hspace": 0.08},
             teeplot_outattrs=teeplot_outattrs,
             teeplot_show=True,
             teeplot_subdir=pathlib.Path(__file__).stem,
         ) as (fig, axes):
-            if len(windows) == 1:
-                axes = [axes]
+            ax_theo = axes[0]
+            actual_axes = axes[1:]
 
-            for ax, w in zip(axes, windows):
+            for s in range(n_strains):
+                color = palette_colors[s]
+                label = f"{s:0{N_SITES}b}"
+                ax_theo.plot(
+                    unique_steps,
+                    theo_R_per_strain[:, s],
+                    color=color,
+                    linestyle="--",
+                    linewidth=1.5,
+                    label=label,
+                )
+            ax_theo.axhline(1.0, color="gray", linestyle=":", linewidth=0.8)
+            ax_theo.set_ylabel("theoretical R\n(R0-like)")
+            ax_theo.set_ylim(bottom=0.0)
+            sns.despine(ax=ax_theo)
+
+            ax_theo.legend(
+                title="strain",
+                loc="center left",
+                bbox_to_anchor=(1.02, 0.5),
+                frameon=False,
+                handletextpad=0.4,
+                ncol=1 if n_strains <= 8 else 2,
+                fontsize=8,
+            )
+            ax_theo.set_title(
+                "per-strain reproduction number "
+                "(scaled to per-infectious-period)",
+                fontsize=10,
+            )
+
+            for ax, w in zip(actual_axes, windows):
                 for s in range(n_strains):
                     color = palette_colors[s]
-                    label = f"{s:0{N_SITES}b}"
                     actual = pd.Series(r_actual_per_strain[:, s])
                     if w > 1:
                         actual = actual.rolling(
@@ -1430,37 +1476,15 @@ def def_make_r_curves_plot(np, pathlib, pd, plt, sns, strain_palette, tp):
                         color=color,
                         linestyle="-",
                         linewidth=1.2,
-                        label=label,
                     )
-                    ax.plot(
-                        unique_steps,
-                        theo_R_per_strain[:, s],
-                        color=color,
-                        linestyle="--",
-                        linewidth=1.2,
-                    )
-                ax.axhline(0.0, color="gray", linestyle=":", linewidth=0.8)
+                ax.axhline(1.0, color="gray", linestyle=":", linewidth=0.8)
                 window_label = (
                     "unsmoothed" if w == 1 else f"rolling mean, window={w}"
                 )
-                ax.set_ylabel(f"R per step\n({window_label})")
+                ax.set_ylabel(f"actual R\n({window_label})")
                 sns.despine(ax=ax)
 
-            axes[-1].set_xlabel("Time")
-            axes[0].legend(
-                title="strain",
-                loc="center left",
-                bbox_to_anchor=(1.02, 0.5),
-                frameon=False,
-                handletextpad=0.4,
-                ncol=1 if n_strains <= 8 else 2,
-                fontsize=8,
-            )
-            axes[0].set_title(
-                "actual (solid) vs. theoretical (dashed) "
-                "per-strain new infections per current infected per step",
-                fontsize=10,
-            )
+            actual_axes[-1].set_xlabel("Time")
 
     return (make_r_curves_plot,)
 
@@ -1591,6 +1615,7 @@ def run_phylogeny_sweep(
                     make_r_curves_plot(
                         PHYLO_N_SITES,
                         _strain_df,
+                        RECOVERY_RATE=RECOVERY_RATE_,
                         palette=palette,
                         teeplot_outattrs={
                             "a": "r-curves",
