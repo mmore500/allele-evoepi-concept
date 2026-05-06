@@ -548,7 +548,9 @@ def def_simulate(
                 )
 
             avg_susc = xp.mean(
-                1.0 - (IMMUNE_STRENGTH * host_immunities), axis=0
+                (1.0 - (IMMUNE_STRENGTH * host_immunities))
+                * (host_statuses == 0)[:, None],
+                axis=0,
             )
 
             immunity_dict = {}
