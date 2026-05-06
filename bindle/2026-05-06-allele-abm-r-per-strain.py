@@ -129,8 +129,7 @@ def configure_backend(ENGINE, cp, np):
 
 @app.cell(hide_code=True)
 def delimit_simulation(mo):
-    mo.md(
-        """
+    mo.md("""
     ## Simulation Implementation
 
     This notebook is an R-per-strain companion to
@@ -140,16 +139,32 @@ def delimit_simulation(mo):
     individual strain (the strain count is `2**N_SITES`, capped here
     at 16). In addition to the phylogeny-and-strain-network plots
     inherited from the 32-site notebook, this notebook renders an
-    "r-curves" figure: two vertically-stacked panels sharing the
-    time axis, with the *theoretical* per-strain reproduction number
-    `R_theo(t, s) = (CONTACT_RATE / RECOVERY_RATE) * S_s(t)` (dashed,
-    using the product of per-allele susceptibilities as the strain
-    susceptibility proxy) on top, and the *actual* per-strain
-    reproduction number `R_actual(t, s) = 1 + (1/RECOVERY_RATE) *
-    d ln(I_s)/dt` (solid, derived from the prevalence trajectory via
-    centered finite differences on log-prevalence) on bottom, color-
-    coded by strain. `R = 1` is the epidemic threshold: strains above
-    are growing, strains below are shrinking.
+    "r-curves" figure: a multi-row stack (one row per smoothing
+    window, unsmoothed at the top) plotting both *actual* and
+    *theoretical* per-strain reproduction numbers, defined per step
+    (rather than per infectious period) so that they can be compared
+    apples-to-apples against directly-observed transmission events:
+
+    * `R_actual(t, s) = new_infections(s, t) / n_with_strain(s, t)` --
+      the number of new strain-`s` infections caused per current
+      strain-`s` infected per step, computed from instrumentation
+      logged inside `simulate()`. `new_infections` is captured
+      pre-mutation in `update_simulation()` so the strain label
+      reflects the strain that actually transmitted, not its
+      post-mutation descendant.
+
+    * `R_theo(t, s)` -- the average over the population of the
+      probability that strain `s` infects a randomly-sampled
+      individual on a single contact in one step (infected hosts
+      contribute zero since they cannot be re-infected), so
+      `R_theo(s, t) * n_with_strain(s, t)` is the expected number of
+      new strain-`s` infections per step. This is logged per step as
+      `strain_df["theoretical_R"]` alongside `count` and
+      `new_infections`.
+
+    Both are plotted as line curves color-coded by strain; actual is
+    rolling-mean smoothed with the row's window, theoretical is left
+    unsmoothed (it is already a smooth function of population state).
 
     Phylogeny estimation still uses *hereditary stratigraphic surface*
     annotations (see https://hstrat.rtfd.io). Each infected host carries
@@ -161,8 +176,7 @@ def delimit_simulation(mo):
 
     The vectorized deposit pattern is adapted from
     https://github.com/mmore500/hstrat-synthesis (see `pylib/track_ca.py`).
-    """
-    )
+    """)
     return
 
 
@@ -387,7 +401,7 @@ def def_simulate(
             pathogen_genomes: xp.ndarray,
             host_immunities: xp.ndarray,
             pathogen_markers: xp.ndarray,
-        ) -> Tuple[xp.ndarray, xp.ndarray, xp.ndarray]:
+        ) -> Tuple[xp.ndarray, xp.ndarray, xp.ndarray, xp.ndarray]:
             contacts = xp.random.randint(
                 low=0, high=POP_SIZE, size=POP_SIZE, dtype=xp.uint32
             )
@@ -409,7 +423,12 @@ def def_simulate(
                 new_infections
             ]
 
-            return host_statuses, pathogen_genomes, pathogen_markers
+            return (
+                host_statuses,
+                pathogen_genomes,
+                pathogen_markers,
+                new_infections,
+            )
 
         def apply_mutations(
             pathogen_genomes: xp.ndarray,
@@ -460,17 +479,19 @@ def def_simulate(
             host_immunities: xp.ndarray,
             pathogen_markers: xp.ndarray,
             t: int,
-        ) -> Tuple[xp.ndarray, xp.ndarray, xp.ndarray, xp.ndarray]:
+        ) -> Tuple[xp.ndarray, xp.ndarray, xp.ndarray, xp.ndarray, xp.ndarray]:
             (
                 host_statuses,
                 pathogen_genomes,
                 pathogen_markers,
+                new_infections,
             ) = transmit_infection(
                 host_statuses,
                 pathogen_genomes,
                 host_immunities,
                 pathogen_markers,
             )
+            new_strain_genomes = pathogen_genomes[new_infections].copy()
             pathogen_genomes = apply_mutations(pathogen_genomes, host_statuses)
             host_statuses, host_immunities = update_recoveries(
                 host_statuses, host_immunities, pathogen_genomes
@@ -483,6 +504,7 @@ def def_simulate(
                 pathogen_genomes,
                 host_immunities,
                 pathogen_markers,
+                new_strain_genomes,
             )
 
         (
@@ -499,12 +521,23 @@ def def_simulate(
         strain_log: List[Dict[str, float]] = []
         n_strains = 1 << N_SITES
 
+        # Precomputed per-(strain, site) susceptibility-column indices
+        # (a strain's allele bit at each site selects which of the two
+        # per-allele susc entries enters the per-strain product).
+        _strain_idx = xp.arange(n_strains, dtype=xp.int64)
+        _site_idx = xp.arange(N_SITES, dtype=xp.int64)
+        _strain_bits = (_strain_idx[:, None] >> _site_idx[None, :]) & 1
+        _strain_cols = (2 * _site_idx[None, :] + _strain_bits).astype(
+            xp.int64,
+        )
+
         for t in tqdm(range(N_STEPS), mininterval=20.0):
             (
                 host_statuses,
                 pathogen_genomes,
                 host_immunities,
                 pathogen_markers,
+                new_strain_genomes,
             ) = update_simulation(
                 host_statuses,
                 pathogen_genomes,
@@ -536,6 +569,38 @@ def def_simulate(
                     float(c) / POP_SIZE for c in strain_counts_arr.tolist()
                 ]
 
+            # Per-strain new infections this step (population fraction).
+            # Captured pre-mutation in update_simulation so the strain
+            # label is the strain that actually transmitted.
+            if new_strain_genomes.size > 0:
+                new_strain_counts_arr = xp.bincount(
+                    new_strain_genomes.astype(xp.int64),
+                    minlength=n_strains,
+                )
+                new_strain_counts = [
+                    float(c) / POP_SIZE for c in new_strain_counts_arr.tolist()
+                ]
+            else:
+                new_strain_counts = [0.0] * n_strains
+
+            # Per-strain theoretical R per current infected per step:
+            # average over the population of P(strain s infects a random
+            # individual in one step), counting infected hosts as 0 since
+            # they cannot be re-infected. Multiplying by n(s, t) gives
+            # the expected number of new strain-s infections per step.
+            host_susc_2d = (1.0 - (IMMUNE_STRENGTH * host_immunities)).reshape(
+                POP_SIZE, 2 * N_SITES
+            )
+            strain_susc_per_host = host_susc_2d[:, _strain_cols].prod(axis=2)
+            strain_susc_per_host = xp.power(strain_susc_per_host, pow)
+            strain_susc_per_host = (
+                strain_susc_per_host * (host_statuses == 0)[:, None]
+            )
+            theo_R_per_strain = (
+                strain_susc_per_host.mean(axis=0) * CONTACT_RATE
+            )
+            theo_R_list = [float(x) for x in theo_R_per_strain.tolist()]
+
             for w, count in enumerate(hw_prevalences):
                 hw_log.append(
                     {
@@ -553,6 +618,8 @@ def def_simulate(
                         "Seed": seed,
                         "strain": s,
                         "count": count,
+                        "new_infections": new_strain_counts[s],
+                        "theoretical_R": theo_R_list[s],
                     }
                 )
 
@@ -664,8 +731,7 @@ def def_simulate(
 
 @app.cell(hide_code=True)
 def delimit_reconstruct(mo):
-    mo.md(
-        """
+    mo.md("""
     ## Surface-Annotation Reconstruction
 
     Given the snapshot records emitted by `simulate(..., track_phylogeny=
@@ -673,8 +739,7 @@ def delimit_reconstruct(mo):
     `hstrat.dataframe.surface_postprocess_trie` to estimate the phylogenetic
     tree. We use `AssignOriginTimeNodeRankTriePostprocessor(t0="dstream_S")`
     so that origin times line up with simulation step numbers.
-    """
-    )
+    """)
     return
 
 
@@ -707,14 +772,12 @@ def def_reconstruct_phylogeny(gc, hstrat, pd, pl):
 
 @app.cell(hide_code=True)
 def delimit_phylogeny(mo):
-    mo.md(
-        """
+    mo.md("""
     ## Surface-Reconstructed Phylogeny
 
     Sweep `N_SITES` over a few values and render the surface-reconstructed
     phylogeny next to the absolute-prevalence and Hamming-weight stackplots.
-    """
-    )
+    """)
     return
 
 
@@ -1269,120 +1332,116 @@ def def_make_allele_curves_plot(allele_palette, np, pathlib, plt, sns, tp):
 
 
 @app.cell
-def def_make_r_curves_plot(np, pathlib, plt, sns, strain_palette, tp):
+def def_make_r_curves_plot(np, pathlib, pd, plt, sns, strain_palette, tp):
     def make_r_curves_plot(
         N_SITES: int,
-        traj_df,
         strain_df,
-        CONTACT_RATE: float,
-        RECOVERY_RATE: float,
-        POP_SIZE: int,
-        prev_floor: float = 1.0,
+        smoothing_windows=(1, 5, 25, 125),
         palette: str = "husl",
         teeplot_outattrs: dict = {},
     ) -> None:
-        """Two-panel stacked figure of per-strain reproduction number:
-        top = theoretical R(t, s) = (CONTACT_RATE/RECOVERY_RATE) * S_s(t)
-        (dashed; S_s(t) is approximated as the product of per-allele
-        population-average susceptibilities for the bits of strain s);
-        bottom = actual R(t, s) = 1 + (1/RECOVERY_RATE) * d ln I_s / dt
-        (solid; I_s(t) read from `strain_df['count']`, which carries the
-        per-strain population-fraction prevalence; the log-derivative is
-        computed via `np.gradient` and masked where `I_s * POP_SIZE` is
-        below `prev_floor` infected hosts to avoid amplifying
-        quantization noise from low-occupancy strains). Strains are
-        color-coded by Hamming weight (hue) with lightness disambiguating
-        strains that share a Hamming weight. R = 1 is drawn as a dotted
-        reference line on both panels.
+        """Multi-row figure of per-strain reproduction number, one row
+        per smoothing window (unsmoothed at the top). In each row,
+        actual R(t, s) = new_infections(s, t) / n_with_strain(s, t)
+        (solid; computed directly from the per-step instrumentation
+        logged in `strain_df`: `new_infections` is the population
+        fraction newly infected with strain s in the step, captured
+        pre-mutation, and `count` is the population fraction currently
+        infected with strain s) is overlaid with theoretical R(t, s)
+        (dashed; logged per step as `theoretical_R`, equal to the
+        average over the population of P(strain s infects a randomly-
+        sampled individual on a single contact in one step), with
+        infected hosts contributing 0 since they cannot be re-infected
+        --- so theoretical_R(s, t) * n_with_strain(s, t) is the
+        expected number of new strain-s infections per step). The
+        actual R is rolling-mean smoothed with the row's window;
+        theoretical R is plotted unsmoothed (it is already a smooth
+        function of population state). Strains are color-coded by
+        Hamming weight (hue) with lightness disambiguating strains of
+        the same weight. The first row's window is always 1 (no
+        smoothing).
         """
         n_strains = 1 << N_SITES
-        traj_df = traj_df.sort_values("Step")
-        steps = traj_df["Step"].to_numpy(dtype=float)
-
-        susc_by_site_bit = np.empty((len(traj_df), N_SITES, 2), dtype=float)
-        for site in range(N_SITES):
-            for bit in range(2):
-                susc_by_site_bit[:, site, bit] = traj_df[
-                    f"Susc_S{site}_B{bit}"
-                ].to_numpy()
-
-        susc_per_strain = np.ones((len(traj_df), n_strains), dtype=float)
-        for s in range(n_strains):
-            for site in range(N_SITES):
-                bit = (s >> site) & 1
-                susc_per_strain[:, s] *= susc_by_site_bit[:, site, bit]
-
-        R0 = CONTACT_RATE / RECOVERY_RATE
-        r_theo_per_strain = R0 * susc_per_strain
 
         unique_steps = np.array(
             sorted(strain_df["Step"].unique()), dtype=float
         )
-        prev_per_strain = np.zeros((len(unique_steps), n_strains), dtype=float)
+        T = len(unique_steps)
         step_to_idx = {t: i for i, t in enumerate(unique_steps.tolist())}
-        for s in range(n_strains):
-            sub = strain_df[strain_df["strain"] == s]
-            for _, row in sub.iterrows():
-                prev_per_strain[step_to_idx[row["Step"]], s] = float(
-                    row["count"]
-                )
 
-        r_actual_per_strain = np.full_like(prev_per_strain, np.nan)
-        for s in range(n_strains):
-            i_s = prev_per_strain[:, s]
-            valid = i_s * POP_SIZE > prev_floor
-            if valid.sum() < 3:
-                continue
-            log_i = np.full_like(i_s, np.nan)
-            log_i[valid] = np.log(i_s[valid])
-            dlog_dt = np.gradient(log_i, unique_steps)
-            r = 1.0 + dlog_dt / RECOVERY_RATE
-            r_actual_per_strain[valid, s] = r[valid]
+        prev_per_strain = np.zeros((T, n_strains), dtype=float)
+        new_inf_per_strain = np.zeros((T, n_strains), dtype=float)
+        theo_R_per_strain = np.zeros((T, n_strains), dtype=float)
+
+        for _, row in strain_df.iterrows():
+            i = step_to_idx[row["Step"]]
+            s = int(row["strain"])
+            prev_per_strain[i, s] = float(row["count"])
+            new_inf_per_strain[i, s] = float(row.get("new_infections", 0.0))
+            theo_R_per_strain[i, s] = float(row.get("theoretical_R", 0.0))
+
+        with np.errstate(divide="ignore", invalid="ignore"):
+            r_actual_per_strain = np.where(
+                prev_per_strain > 0,
+                new_inf_per_strain / prev_per_strain,
+                np.nan,
+            )
 
         palette_colors = strain_palette(N_SITES, base_palette=palette)
 
+        windows = list(smoothing_windows)
+        if not windows or windows[0] != 1:
+            windows = [1] + windows
+
         with tp.teed(
             plt.subplots,
-            nrows=2,
+            nrows=len(windows),
             ncols=1,
-            figsize=(8, 6),
+            figsize=(8, 2.0 * len(windows) + 1.0),
             sharex=True,
-            gridspec_kw={"hspace": 0.05},
+            gridspec_kw={"hspace": 0.08},
             teeplot_outattrs=teeplot_outattrs,
             teeplot_show=True,
             teeplot_subdir=pathlib.Path(__file__).stem,
         ) as (fig, axes):
-            ax_theo, ax_actual = axes
+            if len(windows) == 1:
+                axes = [axes]
 
-            for s in range(n_strains):
-                color = palette_colors[s]
-                label = f"{s:0{N_SITES}b}"
-                ax_theo.plot(
-                    steps,
-                    r_theo_per_strain[:, s],
-                    color=color,
-                    linestyle="--",
-                    linewidth=1.5,
-                    label=label,
+            for ax, w in zip(axes, windows):
+                for s in range(n_strains):
+                    color = palette_colors[s]
+                    label = f"{s:0{N_SITES}b}"
+                    actual = pd.Series(r_actual_per_strain[:, s])
+                    if w > 1:
+                        actual = actual.rolling(
+                            window=w,
+                            min_periods=max(1, w // 4),
+                            center=True,
+                        ).mean()
+                    ax.plot(
+                        unique_steps,
+                        actual.to_numpy(),
+                        color=color,
+                        linestyle="-",
+                        linewidth=1.2,
+                        label=label,
+                    )
+                    ax.plot(
+                        unique_steps,
+                        theo_R_per_strain[:, s],
+                        color=color,
+                        linestyle="--",
+                        linewidth=1.2,
+                    )
+                ax.axhline(0.0, color="gray", linestyle=":", linewidth=0.8)
+                window_label = (
+                    "unsmoothed" if w == 1 else f"rolling mean, window={w}"
                 )
-                ax_actual.plot(
-                    unique_steps,
-                    r_actual_per_strain[:, s],
-                    color=color,
-                    linestyle="-",
-                    linewidth=1.5,
-                    label=label,
-                )
+                ax.set_ylabel(f"R per step\n({window_label})")
+                sns.despine(ax=ax)
 
-            for ax in (ax_theo, ax_actual):
-                ax.axhline(1.0, color="gray", linestyle=":", linewidth=1.0)
-
-            ax_theo.set_ylabel(r"theoretical $R(t)$")
-            ax_theo.set_ylim(bottom=0.0)
-            ax_actual.set_ylabel(r"actual $R(t)$")
-            ax_actual.set_xlabel("Time")
-
-            ax_theo.legend(
+            axes[-1].set_xlabel("Time")
+            axes[0].legend(
                 title="strain",
                 loc="center left",
                 bbox_to_anchor=(1.02, 0.5),
@@ -1391,8 +1450,11 @@ def def_make_r_curves_plot(np, pathlib, plt, sns, strain_palette, tp):
                 ncol=1 if n_strains <= 8 else 2,
                 fontsize=8,
             )
-            sns.despine(ax=ax_theo)
-            sns.despine(ax=ax_actual)
+            axes[0].set_title(
+                "actual (solid) vs. theoretical (dashed) "
+                "per-strain new infections per current infected per step",
+                fontsize=10,
+            )
 
     return (make_r_curves_plot,)
 
@@ -1522,11 +1584,7 @@ def run_phylogeny_sweep(
                     )
                     make_r_curves_plot(
                         PHYLO_N_SITES,
-                        _phylo_df,
                         _strain_df,
-                        CONTACT_RATE=CONTACT_RATE_,
-                        RECOVERY_RATE=RECOVERY_RATE_,
-                        POP_SIZE=POP_SIZE,
                         palette=palette,
                         teeplot_outattrs={
                             "a": "r-curves",
