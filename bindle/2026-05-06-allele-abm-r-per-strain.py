@@ -1309,10 +1309,10 @@ def def_make_r_curves_plot(np, pathlib, plt, sns, strain_palette, tp):
         R0 = CONTACT_RATE / RECOVERY_RATE
         r_theo_per_strain = R0 * susc_per_strain
 
-        unique_steps = np.array(sorted(strain_df["Step"].unique()), dtype=float)
-        prev_per_strain = np.zeros(
-            (len(unique_steps), n_strains), dtype=float
+        unique_steps = np.array(
+            sorted(strain_df["Step"].unique()), dtype=float
         )
+        prev_per_strain = np.zeros((len(unique_steps), n_strains), dtype=float)
         step_to_idx = {t: i for i, t in enumerate(unique_steps.tolist())}
         for s in range(n_strains):
             sub = strain_df[strain_df["strain"] == s]
