@@ -90,7 +90,11 @@ def simulate(
                 counts_dict[f"Strain_{strain_name}"] = float(count) / POP_SIZE
 
         # 2. Host Susceptibility per Allele
-        avg_susc = xp.mean(1.0 - (IMMUNE_STRENGTH * host_immunities), axis=0)
+        avg_susc = xp.mean(
+            (1.0 - (IMMUNE_STRENGTH * host_immunities))
+            * (host_statuses == 0)[:, None],
+            axis=0,
+        )
 
         immunity_dict = {}
         for i in range(2 * N_SITES):
