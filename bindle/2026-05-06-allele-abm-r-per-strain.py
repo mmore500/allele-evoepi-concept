@@ -142,7 +142,7 @@ def delimit_simulation(mo):
     inherited from the 32-site notebook, this notebook renders an
     "r-curves" figure: a multi-row stack with the *expected* per-
     strain reproduction number on the very top row by itself, and
-    the *actual* per-strain reproduction number on subsequent
+    the *empirical* per-strain reproduction number on subsequent
     rows at increasing rolling-mean windows (unsmoothed first). Both
     per-step rates are scaled by the discrete-time R0 multiplier
     `(1 - RECOVERY_RATE) / RECOVERY_RATE` so the plotted values are
@@ -157,7 +157,7 @@ def delimit_simulation(mo):
     steps is `sum_{k=1}^inf (1 - p)^k = (1 - p) / p` (off-by-one if
     you forget the within-step recovery).
 
-    * `R_actual(t, s) = new_infections(s, t) /
+    * `R_empirical(t, s) = new_infections(s, t) /
       n_with_strain(s, t) * (1 - RECOVERY_RATE) / RECOVERY_RATE` --
       new strain-`s` infections caused per current strain-`s`
       infected per step, multiplied by the R0 multiplier, computed
@@ -1367,7 +1367,7 @@ def def_make_r_curves_plot(np, pathlib, pd, plt, sns, strain_palette, tp):
     ) -> None:
         """Multi-row figure of per-strain reproduction number. The
         first row plots the *expected* R per strain on its own; each
-        subsequent row plots the *actual* R per strain at a
+        subsequent row plots the *empirical* R per strain at a
         different rolling-mean window (unsmoothed first). Both per-
         step rates are scaled by the discrete-time R0 multiplier
         `(1 - RECOVERY_RATE) / RECOVERY_RATE` so the plotted values
@@ -1379,7 +1379,7 @@ def def_make_r_curves_plot(np, pathlib, pd, plt, sns, strain_palette, tp):
         primary faces an immediate recovery check before it can
         transmit at the next step.
 
-        * actual R(t, s) = (new_infections(s, t) /
+        * empirical R(t, s) = (new_infections(s, t) /
           n_with_strain(s, t)) * (1 - RECOVERY_RATE) / RECOVERY_RATE.
           Rolling-mean smoothed with the row's window.
         * expected R(t, s) = expected_R_per_step(s, t) *
@@ -1427,12 +1427,12 @@ def def_make_r_curves_plot(np, pathlib, pd, plt, sns, strain_palette, tp):
         expected_R_per_strain = expected_R_per_strain * r0_multiplier
 
         with np.errstate(divide="ignore", invalid="ignore"):
-            r_actual_per_strain = np.where(
+            r_empirical_per_strain = np.where(
                 prev_per_strain > 0,
                 new_inf_per_strain / prev_per_strain,
                 np.nan,
             )
-        r_actual_per_strain = r_actual_per_strain * r0_multiplier
+        r_empirical_per_strain = r_empirical_per_strain * r0_multiplier
 
         palette_colors = strain_palette(N_SITES, base_palette=palette)
 
@@ -1454,7 +1454,7 @@ def def_make_r_curves_plot(np, pathlib, pd, plt, sns, strain_palette, tp):
             teeplot_subdir=pathlib.Path(__file__).stem,
         ) as (fig, axes):
             ax_expected = axes[0]
-            actual_axes = axes[1:]
+            empirical_axes = axes[1:]
 
             for s in range(n_strains):
                 color = palette_colors[s]
@@ -1484,28 +1484,28 @@ def def_make_r_curves_plot(np, pathlib, pd, plt, sns, strain_palette, tp):
                 fontsize=8,
             )
 
-            for ax, w in zip(actual_axes, windows):
+            for ax, w in zip(empirical_axes, windows):
                 for s in range(n_strains):
                     color = palette_colors[s]
-                    actual = pd.Series(r_actual_per_strain[:, s])
+                    empirical = pd.Series(r_empirical_per_strain[:, s])
                     if w > 1:
-                        actual = actual.rolling(
+                        empirical = empirical.rolling(
                             window=w,
                             min_periods=max(1, w // 4),
                             center=True,
                         ).mean()
                     ax.plot(
                         unique_steps,
-                        actual.to_numpy(),
+                        empirical.to_numpy(),
                         color=color,
                         linestyle="-",
                         linewidth=1.2,
                     )
                 ax.axhline(1.0, color="gray", linestyle=":", linewidth=0.8)
-                ax.set_ylabel(f"actual R\nrolling window = {w}")
+                ax.set_ylabel(f"empirical R\nrolling window = {w}")
                 sns.despine(ax=ax)
 
-            actual_axes[-1].set_xlabel("Time")
+            empirical_axes[-1].set_xlabel("Time")
 
     return (make_r_curves_plot,)
 
