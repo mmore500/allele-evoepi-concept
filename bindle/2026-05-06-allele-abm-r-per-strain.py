@@ -142,37 +142,42 @@ def delimit_simulation(mo):
     inherited from the 32-site notebook, this notebook renders an
     "r-curves" figure: a multi-row stack with the *expected* per-
     strain reproduction number on the very top row by itself, and
-    the *empirical* per-strain reproduction number on subsequent
+    the *actual* per-strain reproduction number on subsequent
     rows at increasing rolling-mean windows (unsmoothed first). Both
-    are scaled by the expected infectious period `1 / RECOVERY_RATE`
-    so the plotted values are total expected new infections per
-    infected over an infection (i.e. an `R0`-like quantity) rather
-    than the per-step rate, and `R = 1` is drawn as the
-    epidemic-threshold reference line.
+    per-step rates are scaled by the discrete-time R0 multiplier
+    `(1 - RECOVERY_RATE) / RECOVERY_RATE` so the plotted values are
+    the expected total infections caused by a single primary (an
+    `R0`-like quantity) rather than the per-step rate, and `R = 1`
+    is drawn as the epidemic-threshold reference line. The factor
+    is `(1 - p) / p` rather than `1 / p` because
+    `update_recoveries` runs after `transmit_infection` within the
+    same step, so a primary newly infected in step `t` faces an
+    immediate recovery check before participating as a source at
+    step `t+1`; the expected number of future transmit-as-source
+    steps is `sum_{k=1}^inf (1 - p)^k = (1 - p) / p` (off-by-one if
+    you forget the within-step recovery).
 
-    * `R_empirical(t, s) = new_infections(s, t) /
-      n_with_strain(s, t) / RECOVERY_RATE` -- the number of new
-      strain-`s` infections caused per current strain-`s` infected
-      per step, multiplied by the expected infectious period,
-      computed from instrumentation logged inside `simulate()`.
+    * `R_actual(t, s) = new_infections(s, t) /
+      n_with_strain(s, t) * (1 - RECOVERY_RATE) / RECOVERY_RATE` --
+      new strain-`s` infections caused per current strain-`s`
+      infected per step, multiplied by the R0 multiplier, computed
+      from instrumentation logged inside `simulate()`.
       `new_infections` is captured pre-mutation in
       `update_simulation()` so the strain label reflects the strain
       that actually transmitted, not its post-mutation descendant.
 
-    * `R_expected(t, s) = R_expected_per_step(s, t) / RECOVERY_RATE`,
-      where `R_expected_per_step(s, t)` is the average over the
-      population of the probability that strain `s` infects a
-      randomly-sampled individual on a single contact in one step.
-      Currently-infected hosts contribute zero since they cannot be
-      re-infected --- the `(host_statuses == 0)` mask zeros out
-      their per-host susceptibilities before averaging over the full
-      `POP_SIZE`, so the mean already accounts for the susceptible-
-      only fraction. The per-step quantity is logged as
-      `strain_df["expected_R"]` alongside `count` and
-      `new_infections`; multiplying by the expected infectious
-      period gives the analog of `R0` (so `R_expected(s, t) *
-      n_with_strain(s, t) * RECOVERY_RATE` is the expected number of
-      new strain-`s` infections per step).
+    * `R_expected(t, s) = R_expected_per_step(s, t) *
+      (1 - RECOVERY_RATE) / RECOVERY_RATE`, where
+      `R_expected_per_step(s, t)` is the average over the population
+      of the probability that strain `s` infects a randomly-sampled
+      individual on a single contact in one step. Currently-infected
+      hosts contribute zero since they cannot be re-infected --- the
+      `(host_statuses == 0)` mask zeros out their per-host
+      susceptibilities before averaging over the full `POP_SIZE`, so
+      the mean already accounts for the susceptible-only fraction.
+      The per-step quantity is logged as `strain_df["expected_R"]`
+      alongside `count` and `new_infections`; multiplying by the
+      R0 multiplier gives the analog of `R0`.
 
     Phylogeny estimation still uses *hereditary stratigraphic surface*
     annotations (see https://hstrat.rtfd.io). Each infected host carries
@@ -1362,26 +1367,29 @@ def def_make_r_curves_plot(np, pathlib, pd, plt, sns, strain_palette, tp):
     ) -> None:
         """Multi-row figure of per-strain reproduction number. The
         first row plots the *expected* R per strain on its own; each
-        subsequent row plots the *empirical* R per strain at a
-        different rolling-mean window (unsmoothed first). Both are
-        scaled by the expected infectious period `1 / RECOVERY_RATE`
-        so the plotted values are total expected new infections per
-        infected over an infection (an `R0`-like quantity), not the
-        per-step rate.
+        subsequent row plots the *actual* R per strain at a
+        different rolling-mean window (unsmoothed first). Both per-
+        step rates are scaled by the discrete-time R0 multiplier
+        `(1 - RECOVERY_RATE) / RECOVERY_RATE` so the plotted values
+        are the expected number of total transmissions caused by a
+        single primary infection (an `R0`-like quantity) rather than
+        the per-step rate. The factor is `(1 - p) / p` rather than
+        `1 / p` because `update_recoveries` runs after
+        `transmit_infection` within the same step, so a just-infected
+        primary faces an immediate recovery check before it can
+        transmit at the next step.
 
-        * empirical R(t, s) = (new_infections(s, t) /
-          n_with_strain(s, t)) * (1 / RECOVERY_RATE) -- new strain-s
-          infections per current strain-s infected per step,
-          multiplied by the expected infectious period in steps.
+        * actual R(t, s) = (new_infections(s, t) /
+          n_with_strain(s, t)) * (1 - RECOVERY_RATE) / RECOVERY_RATE.
           Rolling-mean smoothed with the row's window.
         * expected R(t, s) = expected_R_per_step(s, t) *
-          (1 / RECOVERY_RATE), where the per-step quantity is the
-          population-average probability that strain s infects a
-          randomly-sampled individual on a single contact in one step
-          (logged per step as `strain_df["expected_R"]`, with
-          currently-infected hosts contributing 0 since they cannot
-          be re-infected). Plotted unsmoothed since it is already a
-          smooth function of population state.
+          (1 - RECOVERY_RATE) / RECOVERY_RATE, where the per-step
+          quantity is the population-average probability that strain
+          s infects a randomly-sampled individual on a single contact
+          in one step (logged per step as `strain_df["expected_R"]`,
+          with currently-infected hosts contributing 0 since they
+          cannot be re-infected). Plotted unsmoothed since it is
+          already a smooth function of population state.
 
         Strains are color-coded by Hamming weight (hue) with
         lightness disambiguating strains of the same weight. The
@@ -1406,17 +1414,25 @@ def def_make_r_curves_plot(np, pathlib, pd, plt, sns, strain_palette, tp):
             new_inf_per_strain[i, s] = float(row.get("new_infections", 0.0))
             expected_R_per_strain[i, s] = float(row.get("expected_R", 0.0))
 
-        # Convert per-step rates to per-infectious-period totals.
-        infectious_period = 1.0 / RECOVERY_RATE
-        expected_R_per_strain = expected_R_per_strain * infectious_period
+        # Convert per-step rates to per-primary R0-like totals. A
+        # primary newly infected in step t's transmit_infection faces
+        # update_recoveries in the same step, so it participates as a
+        # source in step t+1 only with prob (1 - p), in step t+2 with
+        # prob (1 - p)^2, etc. The expected number of future
+        # transmit_infection participations is therefore
+        # sum_{k=1}^inf (1-p)^k = (1 - p) / p, NOT 1 / p (off-by-one
+        # if you forget that update_recoveries runs after
+        # transmit_infection within the same step).
+        r0_multiplier = (1.0 - RECOVERY_RATE) / RECOVERY_RATE
+        expected_R_per_strain = expected_R_per_strain * r0_multiplier
 
         with np.errstate(divide="ignore", invalid="ignore"):
-            r_empirical_per_strain = np.where(
+            r_actual_per_strain = np.where(
                 prev_per_strain > 0,
                 new_inf_per_strain / prev_per_strain,
                 np.nan,
             )
-        r_empirical_per_strain = r_empirical_per_strain * infectious_period
+        r_actual_per_strain = r_actual_per_strain * r0_multiplier
 
         palette_colors = strain_palette(N_SITES, base_palette=palette)
 
@@ -1438,7 +1454,7 @@ def def_make_r_curves_plot(np, pathlib, pd, plt, sns, strain_palette, tp):
             teeplot_subdir=pathlib.Path(__file__).stem,
         ) as (fig, axes):
             ax_expected = axes[0]
-            empirical_axes = axes[1:]
+            actual_axes = axes[1:]
 
             for s in range(n_strains):
                 color = palette_colors[s]
@@ -1468,28 +1484,28 @@ def def_make_r_curves_plot(np, pathlib, pd, plt, sns, strain_palette, tp):
                 fontsize=8,
             )
 
-            for ax, w in zip(empirical_axes, windows):
+            for ax, w in zip(actual_axes, windows):
                 for s in range(n_strains):
                     color = palette_colors[s]
-                    empirical = pd.Series(r_empirical_per_strain[:, s])
+                    actual = pd.Series(r_actual_per_strain[:, s])
                     if w > 1:
-                        empirical = empirical.rolling(
+                        actual = actual.rolling(
                             window=w,
                             min_periods=max(1, w // 4),
                             center=True,
                         ).mean()
                     ax.plot(
                         unique_steps,
-                        empirical.to_numpy(),
+                        actual.to_numpy(),
                         color=color,
                         linestyle="-",
                         linewidth=1.2,
                     )
                 ax.axhline(1.0, color="gray", linestyle=":", linewidth=0.8)
-                ax.set_ylabel(f"empirical R\nrolling window = {w}")
+                ax.set_ylabel(f"actual R\nrolling window = {w}")
                 sns.despine(ax=ax)
 
-            empirical_axes[-1].set_xlabel("Time")
+            actual_axes[-1].set_xlabel("Time")
 
     return (make_r_curves_plot,)
 
