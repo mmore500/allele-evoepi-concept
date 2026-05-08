@@ -1658,7 +1658,7 @@ def run_phylogeny_sweep(
         (3, POW),
         (4, POW),
         (8, 0.5),
-        (16, 0.25),
+        # (16, 0.25),
     )
 
     nbname = pathlib.Path(__file__).stem
