@@ -1511,6 +1511,82 @@ def def_make_r_curves_plot(np, pathlib, pd, plt, sns, strain_palette, tp):
 
 
 @app.cell
+def def_make_density_heatmap_plot(np, pathlib, plt, sns, tp):
+    def make_density_heatmap_plot(
+        N_SITES: int,
+        strain_df,
+        cmap: str = "rocket_r",
+        teeplot_outattrs: dict = {},
+    ) -> None:
+        """Heatmap of population density binned by Hamming distance to
+        the end-state most populous strain. y-axis is the number of bits
+        in common with that reference strain (top = identical with the
+        end-state strain, bottom = its complement); x-axis is time. Each
+        cell aggregates the population fraction of strains that share
+        the given number of bits with the reference at the given step.
+        """
+        n_strains = 1 << N_SITES
+        unique_steps = np.array(
+            sorted(strain_df["Step"].unique()), dtype=int
+        )
+        T = len(unique_steps)
+        step_to_idx = {t: i for i, t in enumerate(unique_steps.tolist())}
+
+        final_step = int(unique_steps.max())
+        final = strain_df[strain_df["Step"] == final_step]
+        end_strain = int(final.loc[final["count"].idxmax(), "strain"])
+
+        bits_in_common = np.array(
+            [
+                N_SITES - bin(int(s) ^ end_strain).count("1")
+                for s in range(n_strains)
+            ],
+            dtype=int,
+        )
+
+        density = np.zeros((N_SITES + 1, T), dtype=float)
+        for _, row in strain_df.iterrows():
+            i = step_to_idx[int(row["Step"])]
+            s = int(row["strain"])
+            density[bits_in_common[s], i] += float(row["count"])
+
+        with tp.teed(
+            plt.subplots,
+            figsize=(8, 1.5 + 0.4 * (N_SITES + 1)),
+            teeplot_outattrs=teeplot_outattrs,
+            teeplot_show=True,
+            teeplot_subdir=pathlib.Path(__file__).stem,
+        ) as (fig, ax):
+            # origin="lower" places density[0, :] (bits_in_common = 0,
+            # i.e. complement of end-state strain) at the bottom and
+            # density[N_SITES, :] (identical with end-state) at the top.
+            im = ax.imshow(
+                density,
+                origin="lower",
+                aspect="auto",
+                cmap=cmap,
+                extent=[
+                    float(unique_steps.min()) - 0.5,
+                    float(unique_steps.max()) + 0.5,
+                    -0.5,
+                    N_SITES + 0.5,
+                ],
+                interpolation="nearest",
+            )
+            ax.set_yticks(np.arange(N_SITES + 1))
+            ax.set_xlabel("Time")
+            ax.set_ylabel(
+                "bits in common with\nend-state strain "
+                f"{end_strain:0{N_SITES}b}"
+            )
+            cbar = fig.colorbar(im, ax=ax, pad=0.02)
+            cbar.set_label("Population fraction")
+            sns.despine(ax=ax)
+
+    return (make_density_heatmap_plot,)
+
+
+@app.cell
 def run_phylogeny_sweep(
     ENGINE,
     N_REPLICATES,
@@ -1520,6 +1596,7 @@ def run_phylogeny_sweep(
     SKIP_PLOTTING,
     gc,
     make_allele_curves_plot,
+    make_density_heatmap_plot,
     make_phylogeny_plot,
     make_r_curves_plot,
     make_strain_curves_plot,
@@ -1644,6 +1721,20 @@ def run_phylogeny_sweep(
                             "n_steps": int(_phylo_df["Step"].max()) + 1,
                             "replicate": _seed,
                             "palette": palette,
+                            "pow": POW_,
+                        },
+                    )
+                for cmap in "rocket_r", "viridis", "magma_r":
+                    make_density_heatmap_plot(
+                        PHYLO_N_SITES,
+                        _strain_df,
+                        cmap=cmap,
+                        teeplot_outattrs={
+                            "a": "density-heatmap",
+                            "n_sites": PHYLO_N_SITES,
+                            "n_steps": int(_phylo_df["Step"].max()) + 1,
+                            "replicate": _seed,
+                            "cmap": cmap,
                             "pow": POW_,
                         },
                     )
