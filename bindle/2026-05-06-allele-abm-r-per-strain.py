@@ -619,9 +619,7 @@ def def_simulate(
             # would exceed the cap (e.g. N_SITES >= 16 sweeps); the
             # r-curves plot is also skipped for those conditions, so
             # the all-zero column is never consumed downstream.
-            _expected_R_tensor_bytes = (
-                POP_SIZE * n_strains * N_SITES * 4
-            )
+            _expected_R_tensor_bytes = POP_SIZE * n_strains * N_SITES * 4
             if _expected_R_tensor_bytes <= 2 * 1024**3:
                 host_susc_2d = (
                     1.0 - (IMMUNE_STRENGTH * host_immunities)
