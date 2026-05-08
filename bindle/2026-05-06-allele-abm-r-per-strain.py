@@ -1777,7 +1777,7 @@ def run_phylogeny_sweep(
                                 "pow": POW_,
                             },
                         )
-                for cmap in "rocket_r", "viridis", "magma_r":
+                for cmap in "rocket", "viridis", "magma":
                     make_density_heatmap_plot(
                         PHYLO_N_SITES,
                         _strain_df,
