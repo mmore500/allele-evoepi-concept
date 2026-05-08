@@ -11,17 +11,27 @@ def import_std():
     import random
     from typing import Dict, List, Sequence, Tuple, Union
     import uuid
+    import warnings
 
-    return Dict, List, Sequence, Tuple, Union, gc, pathlib, random, uuid
+    return (
+        Dict,
+        List,
+        Sequence,
+        Tuple,
+        Union,
+        gc,
+        pathlib,
+        random,
+        uuid,
+        warnings,
+    )
 
 
 @app.cell
-def import_pkg():
+def import_pkg(warnings):
     try:
         import cupy as cp
     except ImportError:
-        import warnings
-
         warnings.warn(
             "cupy import failed; falling back to numpy "
             "(GPU engine unavailable)",
@@ -214,6 +224,7 @@ def def_simulate(
     gc,
     np,
     pd,
+    pl,
     random,
     tqdm,
     xp,
@@ -245,6 +256,8 @@ def def_simulate(
         Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame],
         Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame],
     ]:
+        from collections import Counter
+
         random.seed(seed)
         np.random.seed(seed)
         xp.random.seed(seed)
@@ -328,10 +341,14 @@ def def_simulate(
                 pathogen_bits[:, :, None] == xp.array([0, 1])
             ).reshape(-1, 2 * N_SITES)
 
+            # active_susc = xp.where(
+            #     pathogen_alleles, host_susceptibilities, 1.0
+            # )
+            # res = xp.prod(active_susc, axis=1)
             active_susc = xp.where(
-                pathogen_alleles, host_susceptibilities, 1.0
+                pathogen_alleles, host_susceptibilities, np.nan
             )
-            res = xp.prod(active_susc, axis=1)
+            res = xp.nanmean(active_susc, axis=1)
             assert res.shape == (POP_SIZE,)
             return xp.pow(res, pow)
 
@@ -541,18 +558,17 @@ def def_simulate(
         )
         data_log: List[Dict[str, float]] = []
         hw_log: List[Dict[str, float]] = []
-        strain_log: List[Dict[str, float]] = []
-        n_strains = 1 << N_SITES
 
-        # Precomputed per-(strain, site) susceptibility-column indices
-        # (a strain's allele bit at each site selects which of the two
-        # per-allele susc entries enters the per-strain product).
-        _strain_idx = xp.arange(n_strains, dtype=xp.int64)
-        _site_idx = xp.arange(N_SITES, dtype=xp.int64)
-        _strain_bits = (_strain_idx[:, None] >> _site_idx[None, :]) & 1
-        _strain_cols = (2 * _site_idx[None, :] + _strain_bits).astype(
-            xp.int64,
-        )
+        # Per-step strain tracking uses sparse Counters over strains
+        # actually present (counts circulating + new infections) plus a
+        # global `observed_strains` set. The dense (Step, strain) rows
+        # are materialized after the loop via `counter.get(s, 0)` over
+        # the observed set --- avoiding O(N_STEPS * 2**N_SITES) memory
+        # that breaks the high-N_SITES sweeps.
+        strain_counters: List[Counter] = []
+        new_strain_counters: List[Counter] = []
+        expected_R_dicts: List[Dict[int, float]] = []
+        observed_strains: set = set()
 
         for t in tqdm(range(N_STEPS), mininterval=20.0):
             (
@@ -571,7 +587,7 @@ def def_simulate(
 
             inf_mask = host_statuses > 0
             hw_prevalences: List[float] = [0.0] * (N_SITES + 1)
-            strain_prevalences: List[float] = [0.0] * n_strains
+            strain_counter: Counter = Counter()
 
             if xp.any(inf_mask):
                 infected_bits = (
@@ -585,26 +601,40 @@ def def_simulate(
                 ]
 
                 strain_per_host = pathogen_genomes[inf_mask].astype(xp.int64)
-                strain_counts_arr = xp.bincount(
-                    strain_per_host, minlength=n_strains
+                _u_strains, _u_counts = xp.unique(
+                    strain_per_host,
+                    return_counts=True,
                 )
-                strain_prevalences = [
-                    float(c) / POP_SIZE for c in strain_counts_arr.tolist()
-                ]
+                strain_counter = Counter(
+                    dict(
+                        zip(
+                            map(int, _u_strains.tolist()),
+                            map(int, _u_counts.tolist()),
+                        ),
+                    ),
+                )
 
-            # Per-strain new infections this step (population fraction).
+            # Per-strain new infections this step (raw counts; divided
+            # by POP_SIZE when materializing strain_log post-loop).
             # Captured pre-mutation in update_simulation so the strain
             # label is the strain that actually transmitted.
+            new_strain_counter: Counter = Counter()
             if new_strain_genomes.size > 0:
-                new_strain_counts_arr = xp.bincount(
+                _n_strains, _n_counts = xp.unique(
                     new_strain_genomes.astype(xp.int64),
-                    minlength=n_strains,
+                    return_counts=True,
                 )
-                new_strain_counts = [
-                    float(c) / POP_SIZE for c in new_strain_counts_arr.tolist()
-                ]
-            else:
-                new_strain_counts = [0.0] * n_strains
+                new_strain_counter = Counter(
+                    dict(
+                        zip(
+                            map(int, _n_strains.tolist()),
+                            map(int, _n_counts.tolist()),
+                        ),
+                    ),
+                )
+
+            observed_strains.update(strain_counter.keys())
+            observed_strains.update(new_strain_counter.keys())
 
             # Per-strain expected R per current infected per step:
             # average over the population of P(strain s infects a random
@@ -614,13 +644,26 @@ def def_simulate(
             # entries before averaging over the full POP_SIZE, so the
             # mean already accounts for the susceptible-only fraction.
             # Multiplying by n(s, t) gives the expected number of new
-            # strain-s infections per step. The dense
-            # (POP_SIZE, n_strains, N_SITES) tensor is skipped when it
-            # would exceed the cap (e.g. N_SITES >= 16 sweeps); the
-            # r-curves plot is also skipped for those conditions, so
-            # the all-zero column is never consumed downstream.
-            _expected_R_tensor_bytes = POP_SIZE * n_strains * N_SITES * 4
-            if _expected_R_tensor_bytes <= 2 * 1024**3:
+            # strain-s infections per step. We only compute it for the
+            # cumulative observed-strain set, since unobserved strains
+            # never get logged --- the (POP_SIZE, n_observed, N_SITES)
+            # tensor is gated by a memory cap; over the cap, the dict
+            # is empty and downstream rows fall back to 0.0 via .get().
+            expected_R_dict: Dict[int, float] = {}
+            n_observed = len(observed_strains)
+            _expected_R_tensor_bytes = POP_SIZE * n_observed * N_SITES * 4
+            if n_observed > 0 and _expected_R_tensor_bytes <= 2 * 1024**3:
+                _observed_arr = xp.asarray(
+                    sorted(observed_strains),
+                    dtype=xp.int64,
+                )
+                _site_idx = xp.arange(N_SITES, dtype=xp.int64)
+                _strain_bits = (
+                    _observed_arr[:, None] >> _site_idx[None, :]
+                ) & 1
+                _strain_cols = (2 * _site_idx[None, :] + _strain_bits).astype(
+                    xp.int64
+                )
                 host_susc_2d = (
                     1.0 - (IMMUNE_STRENGTH * host_immunities)
                 ).reshape(POP_SIZE, 2 * N_SITES)
@@ -634,11 +677,12 @@ def def_simulate(
                 expected_R_per_strain = (
                     strain_susc_per_host.mean(axis=0) * CONTACT_RATE
                 )
-                expected_R_list = [
-                    float(x) for x in expected_R_per_strain.tolist()
-                ]
-            else:
-                expected_R_list = [0.0] * n_strains
+                expected_R_dict = dict(
+                    zip(
+                        map(int, _observed_arr.tolist()),
+                        map(float, expected_R_per_strain.tolist()),
+                    ),
+                )
 
             for w, count in enumerate(hw_prevalences):
                 hw_log.append(
@@ -650,17 +694,9 @@ def def_simulate(
                     }
                 )
 
-            for s, count in enumerate(strain_prevalences):
-                strain_log.append(
-                    {
-                        "Step": t,
-                        "Seed": seed,
-                        "strain": s,
-                        "count": count,
-                        "new_infections": new_strain_counts[s],
-                        "expected_R": expected_R_list[s],
-                    }
-                )
+            strain_counters.append(strain_counter)
+            new_strain_counters.append(new_strain_counter)
+            expected_R_dicts.append(expected_R_dict)
 
             avg_susc = xp.mean(
                 (1.0 - (IMMUNE_STRENGTH * host_immunities))
@@ -682,9 +718,33 @@ def def_simulate(
             log_entry.update(immunity_dict)
             data_log.append(log_entry)
 
-        df = pd.DataFrame(data_log).fillna(0).copy()
-        hw_df = pd.DataFrame(hw_log)
-        strain_df = pd.DataFrame(strain_log)
+        # Materialize the dense (Step, observed_strain) rows from the
+        # per-step Counters and the global observed-strain set, using
+        # `.get(s, 0)` to fill in zeros for strains not present at a
+        # given step. Strains never observed across the whole run get
+        # no rows (downstream code reads from strain_df by strain id,
+        # so a missing strain is implicitly zero).
+        sorted_observed = sorted(observed_strains)
+        strain_log: List[Dict[str, float]] = []
+        for t in tqdm(range(N_STEPS)):
+            sc = strain_counters[t]
+            nc = new_strain_counters[t]
+            er = expected_R_dicts[t]
+            for s in sorted_observed:
+                strain_log.append(
+                    {
+                        "Step": t,
+                        "Seed": seed,
+                        "strain": s,
+                        "count": sc.get(s, 0) / POP_SIZE,
+                        "new_infections": nc.get(s, 0) / POP_SIZE,
+                        "expected_R": er.get(s, 0.0),
+                    }
+                )
+
+        df = pl.DataFrame(data_log).to_pandas().fillna(0)
+        hw_df = pl.DataFrame(hw_log).to_pandas()
+        strain_df = pl.DataFrame(strain_log).to_pandas()
         if not track_phylogeny:
             return df, hw_df, strain_df
 
@@ -1371,7 +1431,7 @@ def def_make_allele_curves_plot(allele_palette, np, pathlib, plt, sns, tp):
             sns.despine(ax=ax_susc)
             sns.despine(ax=ax_prev)
 
-    return (make_allele_curves_plot,)
+    return
 
 
 @app.cell
@@ -1592,7 +1652,7 @@ def def_make_density_heatmap_plot(np, pathlib, plt, sns, tp):
 
         with tp.teed(
             plt.subplots,
-            figsize=(8, 1.5 + 0.4 * (N_SITES + 1)),
+            figsize=(8, 3),
             teeplot_outattrs=teeplot_outattrs,
             teeplot_show=True,
             teeplot_subdir=pathlib.Path(__file__).stem,
@@ -1605,6 +1665,8 @@ def def_make_density_heatmap_plot(np, pathlib, plt, sns, tp):
                 origin="lower",
                 aspect="auto",
                 cmap=trunc_cmap,
+                vmin=0.0,  # Set the bottom of the colormap scale
+                vmax=0.33,  # Saturate anything above 0.33
                 extent=[
                     float(unique_steps.min()) - 0.5,
                     float(unique_steps.max()) + 0.5,
@@ -1627,6 +1689,158 @@ def def_make_density_heatmap_plot(np, pathlib, plt, sns, tp):
 
 
 @app.cell
+def _(np, pathlib, pd, sns, tp, warnings):
+    def make_density_ridge_plot(
+        N_SITES: int,
+        strain_df: pd.DataFrame,
+        cmap: str = "rocket_r",
+        teeplot_outattrs: dict = {},
+    ) -> None:
+        """Ridge plot of population density binned by Hamming distance to
+        the end-state most populous strain over time.
+
+        Uses manual column-by-column normalization mapped to an explicit
+        stepped histplot to guarantee exact relative densities and avoid KDE/binning warnings.
+        """
+        n_strains = 1 << N_SITES
+
+        unique_steps = np.array(
+            sorted(strain_df["Step"].unique()), dtype=np.int64
+        )
+        T = len(unique_steps)
+        final_step = int(unique_steps.max())
+
+        final = strain_df[strain_df["Step"] == final_step]
+        end_strain = int(final.loc[final["count"].idxmax(), "strain"])
+
+        bits_in_common = N_SITES - np.array(
+            [bin(int(s) ^ end_strain).count("1") for s in range(n_strains)],
+            dtype=np.int64,
+        )
+
+        strains_arr = strain_df["strain"].to_numpy().astype(np.int64)
+        steps_arr = strain_df["Step"].to_numpy().astype(np.int64)
+        counts_arr = strain_df["count"].to_numpy(dtype=float)
+        bic_arr = bits_in_common[strains_arr]
+        step_idx_arr = np.searchsorted(unique_steps, steps_arr)
+
+        # 1. Manually calculate the exact density matrix (from original heatmap logic)
+        density = np.zeros((N_SITES + 1, T), dtype=float)
+        np.add.at(density, (bic_arr, step_idx_arr), counts_arr)
+
+        # 2. Normalize each column so values represent the proportion of *circulating* strains
+        col_totals = density.sum(axis=0, keepdims=True)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            density = np.where(col_totals > 0, density / col_totals, 0.0)
+
+        # 3. Convert the exact density matrix into a tidy dataframe for Seaborn
+        rows = []
+        for bic in range(N_SITES + 1):
+            for t_idx, step in enumerate(unique_steps):
+                rows.append(
+                    {
+                        "bits_in_common": bic,
+                        "Step": step,
+                        "norm_density": density[bic, t_idx],
+                    }
+                )
+        plot_df = pd.DataFrame(rows)
+
+        # 4. Construct explicit bin edges and convert to LIST to prevent Seaborn array evaluation bug
+        if len(unique_steps) > 1:
+            half_step = (unique_steps[1] - unique_steps[0]) / 2.0
+            np.append(
+                unique_steps - half_step, unique_steps[-1] + half_step
+            ).tolist()
+        else:
+            strain_df["Step"].max() + 1  # Fallback
+
+        # Set up the order so the end-state strain (N_SITES bits in common) is at the top
+        # Convert to list to prevent any other numpy array truth value evaluation bugs
+        row_order = list(range(N_SITES, -1, -1))
+
+        # Initialize the palette
+        pal = sns.color_palette(cmap, n_colors=N_SITES + 1)
+
+        with warnings.catch_warnings():
+            # Suppress the tight_layout warning caused by our intentional negative hspace squishing
+            warnings.filterwarnings(
+                "ignore",
+                message="This figure includes Axes that are not compatible with tight_layout",
+                category=UserWarning,
+            )
+
+            # Use teeplot directly on displot; it yields the FacetGrid object
+            with tp.teed(
+                sns.displot,
+                data=plot_df,
+                x="Step",
+                weights="norm_density",  # Use our manually calculated exact proportions
+                row="bits_in_common",
+                hue="bits_in_common",
+                kind="hist",
+                # bins=bins,              # Explicit list bins silence the warning
+                element="step",  # Continuous step outline
+                row_order=row_order,
+                hue_order=row_order,
+                discrete=True,
+                aspect=15,
+                height=0.2,
+                palette=pal,
+                clip_on=False,
+                fill=True,
+                alpha=0.8,
+                linewidth=1.5,
+                # facet_kws={"gridspec_kws": {"hspace": -0.25}},
+                teeplot_outattrs=teeplot_outattrs,
+                teeplot_show=True,
+                teeplot_subdir=pathlib.Path(__file__).stem,
+            ) as g:
+
+                # # Draw a white outline over the stepped ridges
+                # g.map_dataframe(
+                #     sns.histplot,
+                #     x="Step",
+                #     weights="norm_density",
+                #     bins=bins,
+                #     element="step",
+                #     clip_on=False,
+                #     fill=False,
+                #     color="w",
+                #     lw=2
+                # )
+
+                # Add a horizontal reference line at the base of each ridge
+                # g.refline(y=0, linewidth=2, linestyle="-", color=None, clip_on=False)
+
+                # Safely apply labels by iterating over the flat axes directly
+                for ax, label_val, color in zip(g.axes.flat, row_order, pal):
+                    ax.text(
+                        -0.02,
+                        0.2,
+                        f"{label_val} bits",
+                        fontweight="bold",
+                        color=color,
+                        ha="right",
+                        va="center",
+                        transform=ax.transAxes,
+                    )
+
+                # Fallback to ensure the rows are perfectly squished
+                # g.figure.subplots_adjust(hspace=-0.25)
+
+                # Clean up standard axes details and definitively remove subplot titles
+                g.set_titles("")
+                g.set(yticks=[], ylabel="", ylim=(0, None))
+                g.despine(bottom=True, left=True)
+
+                # Enforce standard X-axis formatting
+                g.set_xlabels("Time")
+
+    return (make_density_ridge_plot,)
+
+
+@app.cell
 def run_phylogeny_sweep(
     ENGINE,
     N_REPLICATES,
@@ -1635,8 +1849,8 @@ def run_phylogeny_sweep(
     POW,
     SKIP_PLOTTING,
     gc,
-    make_allele_curves_plot,
     make_density_heatmap_plot,
+    make_density_ridge_plot,
     make_phylogeny_plot,
     make_r_curves_plot,
     make_strain_curves_plot,
@@ -1657,7 +1871,10 @@ def run_phylogeny_sweep(
         (2, POW),
         (3, POW),
         (4, POW),
-        (8, 0.5),
+        # (20, 2.5),
+        # (20, 1),
+        # (20, 1.5),
+        # (12, 2.5),
         # (16, 0.25),
     )
 
@@ -1680,12 +1897,8 @@ def run_phylogeny_sweep(
 
     for _seed in range(1, N_REPLICATES + 1):
         for PHYLO_N_SITES, POW_ in PHYLO_CONDITIONS:
-            n_strains_ = 1 << PHYLO_N_SITES
-            # 16- and 65k-strain panels are infeasible for per-strain
-            # plots that draw one line per strain or build an
-            # n_strains x n_strains adjacency matrix; gate them off so
-            # the heatmap and other aggregate plots still render.
-            do_per_strain_plots = n_strains_ <= 16
+            1 << PHYLO_N_SITES
+            do_per_strain_plots = True
             replicate_uid = uuid.uuid4().hex
             print(
                 f"=== seed={_seed} N_SITES={PHYLO_N_SITES} "
@@ -1696,13 +1909,13 @@ def run_phylogeny_sweep(
             _phylo_df, _hw_df, _strain_df, _records_df = simulate(
                 MUTATION_RATE=PHYLO_MUTATION_RATE,
                 N_SITES=PHYLO_N_SITES,
-                N_STEPS=N_STEPS,
-                POP_SIZE=POP_SIZE,
+                N_STEPS=1_200,
+                POP_SIZE=10_000,
                 CONTACT_RATE=CONTACT_RATE_,
                 RECOVERY_RATE=RECOVERY_RATE_,
-                WANING_RATE=0.01,
+                WANING_RATE=0.03,
                 IMMUNE_STRENGTH=0.7,
-                SEED_COUNT=2,
+                SEED_COUNT=5,
                 IMMUNITY_FLOOR=0.05,
                 IMMUNITY_CEILING=1.0,
                 seed=_seed,
@@ -1739,7 +1952,7 @@ def run_phylogeny_sweep(
                 print("  (SKIP_PLOTTING=True — skipping strain curves)")
             else:
                 for palette in "husl", "hls", "Set2":
-                    if do_per_strain_plots:
+                    if PHYLO_N_SITES < 8:
                         make_strain_curves_plot(
                             PHYLO_N_SITES,
                             _phylo_df,
@@ -1754,21 +1967,21 @@ def run_phylogeny_sweep(
                                 "pow": POW_,
                             },
                         )
-                    make_allele_curves_plot(
-                        PHYLO_N_SITES,
-                        _phylo_df,
-                        _strain_df,
-                        palette=palette,
-                        teeplot_outattrs={
-                            "a": "allele-curves",
-                            "n_sites": PHYLO_N_SITES,
-                            "n_steps": int(_phylo_df["Step"].max()) + 1,
-                            "replicate": _seed,
-                            "palette": palette,
-                            "pow": POW_,
-                        },
-                    )
-                    if do_per_strain_plots:
+                    # make_allele_curves_plot(
+                    #     PHYLO_N_SITES,
+                    #     _phylo_df,
+                    #     _strain_df,
+                    #     palette=palette,
+                    #     teeplot_outattrs={
+                    #         "a": "allele-curves",
+                    #         "n_sites": PHYLO_N_SITES,
+                    #         "n_steps": int(_phylo_df["Step"].max()) + 1,
+                    #         "replicate": _seed,
+                    #         "palette": palette,
+                    #         "pow": POW_,
+                    #     },
+                    # )
+                    if PHYLO_N_SITES < 8:
                         make_r_curves_plot(
                             PHYLO_N_SITES,
                             _strain_df,
@@ -1784,6 +1997,19 @@ def run_phylogeny_sweep(
                             },
                         )
                 for cmap in "rocket", "viridis", "magma":
+                    make_density_ridge_plot(
+                        PHYLO_N_SITES,
+                        _strain_df,
+                        cmap=cmap,
+                        teeplot_outattrs={
+                            "a": "density-ridgeplot",
+                            "n_sites": PHYLO_N_SITES,
+                            "n_steps": int(_phylo_df["Step"].max()) + 1,
+                            "replicate": _seed,
+                            "cmap": cmap,
+                            "pow": POW_,
+                        },
+                    )
                     make_density_heatmap_plot(
                         PHYLO_N_SITES,
                         _strain_df,
@@ -1903,6 +2129,11 @@ def run_phylogeny_sweep(
         f"wrote records parquet ({len(records_df_all)} rows): {records_path}"
     )
     print(f"wrote phylogeny parquet ({len(phylo_df_all)} rows): {phylo_path}")
+    return
+
+
+@app.cell
+def _():
     return
 
 
