@@ -133,11 +133,20 @@ def delimit_simulation(mo):
     ## Simulation Implementation
 
     This notebook is an R-per-strain companion to
-    `2026-05-03-allele-abm-strain-curves.py`: the sweep is restricted
-    to `N_SITES = 2, 3, 4` so that per-strain prevalence and
-    per-strain population-average susceptibility can be tracked by
-    individual strain (the strain count is `2**N_SITES`, capped here
-    at 16). In addition to the phylogeny-and-strain-network plots
+    `2026-05-03-allele-abm-strain-curves.py`: the low-`N_SITES` rows
+    of the sweep (`2, 3, 4`) keep the strain count
+    `2**N_SITES <= 16` so that per-strain prevalence and per-strain
+    population-average susceptibility can be tracked by individual
+    strain. The sweep is extended with two high-`N_SITES` rows
+    (`(N_SITES, pow) = (8, 0.5), (16, 0.25)`) for which the
+    per-strain stack-plot, R-curves, and strain-graph panels are
+    skipped (one line/node per strain is unreadable, and the dense
+    `(POP_SIZE, n_strains, N_SITES)` susceptibility tensor used for
+    expected-R is gated off above a memory cap). The Hamming-distance
+    density heatmap aggregates only `N_SITES + 1` bins, so it
+    continues to render at 8 and 16 sites.
+
+    In addition to the phylogeny-and-strain-network plots
     inherited from the 32-site notebook, this notebook renders an
     "r-curves" figure: a multi-row stack with the *expected* per-
     strain reproduction number on the very top row by itself, and
@@ -603,21 +612,31 @@ def def_simulate(
             # entries before averaging over the full POP_SIZE, so the
             # mean already accounts for the susceptible-only fraction.
             # Multiplying by n(s, t) gives the expected number of new
-            # strain-s infections per step.
-            host_susc_2d = (1.0 - (IMMUNE_STRENGTH * host_immunities)).reshape(
-                POP_SIZE, 2 * N_SITES
-            )
-            strain_susc_per_host = host_susc_2d[:, _strain_cols].prod(axis=2)
-            strain_susc_per_host = xp.power(strain_susc_per_host, pow)
-            strain_susc_per_host = (
-                strain_susc_per_host * (host_statuses == 0)[:, None]
-            )
-            expected_R_per_strain = (
-                strain_susc_per_host.mean(axis=0) * CONTACT_RATE
-            )
-            expected_R_list = [
-                float(x) for x in expected_R_per_strain.tolist()
-            ]
+            # strain-s infections per step. The dense
+            # (POP_SIZE, n_strains, N_SITES) tensor is skipped when it
+            # would exceed the cap (e.g. N_SITES >= 16 sweeps); the
+            # r-curves plot is also skipped for those conditions, so
+            # the all-zero column is never consumed downstream.
+            _expected_R_tensor_bytes = POP_SIZE * n_strains * N_SITES * 4
+            if _expected_R_tensor_bytes <= 2 * 1024**3:
+                host_susc_2d = (
+                    1.0 - (IMMUNE_STRENGTH * host_immunities)
+                ).reshape(POP_SIZE, 2 * N_SITES)
+                strain_susc_per_host = host_susc_2d[:, _strain_cols].prod(
+                    axis=2,
+                )
+                strain_susc_per_host = xp.power(strain_susc_per_host, pow)
+                strain_susc_per_host = (
+                    strain_susc_per_host * (host_statuses == 0)[:, None]
+                )
+                expected_R_per_strain = (
+                    strain_susc_per_host.mean(axis=0) * CONTACT_RATE
+                )
+                expected_R_list = [
+                    float(x) for x in expected_R_per_strain.tolist()
+                ]
+            else:
+                expected_R_list = [0.0] * n_strains
 
             for w, count in enumerate(hw_prevalences):
                 hw_log.append(
@@ -1506,6 +1525,8 @@ def def_make_r_curves_plot(np, pathlib, pd, plt, sns, strain_palette, tp):
 
 @app.cell
 def def_make_density_heatmap_plot(np, pathlib, plt, sns, tp):
+    import matplotlib.colors as mcolors
+
     def make_density_heatmap_plot(
         N_SITES: int,
         strain_df,
@@ -1513,36 +1534,55 @@ def def_make_density_heatmap_plot(np, pathlib, plt, sns, tp):
         teeplot_outattrs: dict = {},
     ) -> None:
         """Heatmap of population density binned by Hamming distance to
-        the end-state most populous strain. y-axis is the number of bits
-        in common with that reference strain (top = identical with the
-        end-state strain, bottom = its complement); x-axis is time. Each
-        cell aggregates the population fraction of strains that share
-        the given number of bits with the reference at the given step.
+        the end-state most populous strain. y-axis is the number of
+        bits in common with that reference strain (top = identical
+        with the end-state strain, bottom = its complement); x-axis is
+        time. Each column is normalized to sum to 1, so cells encode
+        the proportion of *circulating* strains (not the host
+        population fraction) sharing the given number of bits with the
+        reference at the given step. The colormap is truncated and
+        true-zero cells are masked white so that barely-positive bins
+        are clearly distinguishable from empty bins.
         """
         n_strains = 1 << N_SITES
+
         unique_steps = np.array(
-            sorted(strain_df["Step"].unique()), dtype=int
+            sorted(strain_df["Step"].unique()), dtype=np.int64
         )
         T = len(unique_steps)
-        step_to_idx = {t: i for i, t in enumerate(unique_steps.tolist())}
-
         final_step = int(unique_steps.max())
+
         final = strain_df[strain_df["Step"] == final_step]
         end_strain = int(final.loc[final["count"].idxmax(), "strain"])
 
-        bits_in_common = np.array(
-            [
-                N_SITES - bin(int(s) ^ end_strain).count("1")
-                for s in range(n_strains)
-            ],
-            dtype=int,
+        bits_in_common = N_SITES - np.array(
+            [bin(int(s) ^ end_strain).count("1") for s in range(n_strains)],
+            dtype=np.int64,
         )
 
+        strains_arr = strain_df["strain"].to_numpy().astype(np.int64)
+        steps_arr = strain_df["Step"].to_numpy().astype(np.int64)
+        counts_arr = strain_df["count"].to_numpy(dtype=float)
+        bic_arr = bits_in_common[strains_arr]
+        step_idx_arr = np.searchsorted(unique_steps, steps_arr)
+
         density = np.zeros((N_SITES + 1, T), dtype=float)
-        for _, row in strain_df.iterrows():
-            i = step_to_idx[int(row["Step"])]
-            s = int(row["strain"])
-            density[bits_in_common[s], i] += float(row["count"])
+        np.add.at(density, (bic_arr, step_idx_arr), counts_arr)
+
+        # Normalize each column so values represent the proportion of
+        # *circulating* strains rather than the host-population
+        # fraction. Steps with no infections leave the column at zero.
+        col_totals = density.sum(axis=0, keepdims=True)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            density = np.where(col_totals > 0, density / col_totals, 0.0)
+
+        base_cmap = plt.get_cmap(cmap)
+        trunc_cmap = mcolors.LinearSegmentedColormap.from_list(
+            f"{cmap}_trunc",
+            base_cmap(np.linspace(0.2, 1.0, 256)),
+        )
+        trunc_cmap.set_bad("white")
+        masked_density = np.ma.masked_equal(density, 0.0)
 
         with tp.teed(
             plt.subplots,
@@ -1552,13 +1592,13 @@ def def_make_density_heatmap_plot(np, pathlib, plt, sns, tp):
             teeplot_subdir=pathlib.Path(__file__).stem,
         ) as (fig, ax):
             # origin="lower" places density[0, :] (bits_in_common = 0,
-            # i.e. complement of end-state strain) at the bottom and
+            # complement of end-state strain) at the bottom and
             # density[N_SITES, :] (identical with end-state) at the top.
             im = ax.imshow(
-                density,
+                masked_density,
                 origin="lower",
                 aspect="auto",
-                cmap=cmap,
+                cmap=trunc_cmap,
                 extent=[
                     float(unique_steps.min()) - 0.5,
                     float(unique_steps.max()) + 0.5,
@@ -1574,7 +1614,7 @@ def def_make_density_heatmap_plot(np, pathlib, plt, sns, tp):
                 f"{end_strain:0{N_SITES}b}"
             )
             cbar = fig.colorbar(im, ax=ax, pad=0.02)
-            cbar.set_label("Population fraction")
+            cbar.set_label("Fraction of circulating strains")
             sns.despine(ax=ax)
 
     return (make_density_heatmap_plot,)
@@ -1602,7 +1642,18 @@ def run_phylogeny_sweep(
     uuid,
 ):
     PHYLO_MUTATION_RATE = 1e-5
-    POW_ = POW
+
+    # Sweep conditions: (N_SITES, pow). Low-N_SITES rows reuse the CLI
+    # `pow` value; the 8- and 16-site rows tune `pow` down to keep the
+    # R0-like quantity in a comparable range when more sites multiply
+    # the per-strain susceptibility product.
+    PHYLO_CONDITIONS = (
+        (2, POW),
+        (3, POW),
+        (4, POW),
+        (8, 0.5),
+        # (16, 0.25),
+    )
 
     nbname = pathlib.Path(__file__).stem
     out_dir = pathlib.Path("outdata") / nbname
@@ -1622,11 +1673,17 @@ def run_phylogeny_sweep(
     phylo_chunks = []
 
     for _seed in range(1, N_REPLICATES + 1):
-        for PHYLO_N_SITES in (2, 3, 4):
+        for PHYLO_N_SITES, POW_ in PHYLO_CONDITIONS:
+            n_strains_ = 1 << PHYLO_N_SITES
+            # 16- and 65k-strain panels are infeasible for per-strain
+            # plots that draw one line per strain or build an
+            # n_strains x n_strains adjacency matrix; gate them off so
+            # the heatmap and other aggregate plots still render.
+            do_per_strain_plots = n_strains_ <= 16
             replicate_uid = uuid.uuid4().hex
             print(
                 f"=== seed={_seed} N_SITES={PHYLO_N_SITES} "
-                f"uid={replicate_uid} ===",
+                f"pow={POW_} uid={replicate_uid} ===",
             )
             CONTACT_RATE_ = 0.35
             RECOVERY_RATE_ = 0.1
@@ -1676,20 +1733,21 @@ def run_phylogeny_sweep(
                 print("  (SKIP_PLOTTING=True — skipping strain curves)")
             else:
                 for palette in "husl", "hls", "Set2":
-                    make_strain_curves_plot(
-                        PHYLO_N_SITES,
-                        _phylo_df,
-                        _strain_df,
-                        palette=palette,
-                        teeplot_outattrs={
-                            "a": "strain-curves",
-                            "n_sites": PHYLO_N_SITES,
-                            "n_steps": int(_phylo_df["Step"].max()) + 1,
-                            "replicate": _seed,
-                            "palette": palette,
-                            "pow": POW_,
-                        },
-                    )
+                    if do_per_strain_plots:
+                        make_strain_curves_plot(
+                            PHYLO_N_SITES,
+                            _phylo_df,
+                            _strain_df,
+                            palette=palette,
+                            teeplot_outattrs={
+                                "a": "strain-curves",
+                                "n_sites": PHYLO_N_SITES,
+                                "n_steps": int(_phylo_df["Step"].max()) + 1,
+                                "replicate": _seed,
+                                "palette": palette,
+                                "pow": POW_,
+                            },
+                        )
                     make_allele_curves_plot(
                         PHYLO_N_SITES,
                         _phylo_df,
@@ -1704,20 +1762,21 @@ def run_phylogeny_sweep(
                             "pow": POW_,
                         },
                     )
-                    make_r_curves_plot(
-                        PHYLO_N_SITES,
-                        _strain_df,
-                        RECOVERY_RATE=RECOVERY_RATE_,
-                        palette=palette,
-                        teeplot_outattrs={
-                            "a": "r-curves",
-                            "n_sites": PHYLO_N_SITES,
-                            "n_steps": int(_phylo_df["Step"].max()) + 1,
-                            "replicate": _seed,
-                            "palette": palette,
-                            "pow": POW_,
-                        },
-                    )
+                    if do_per_strain_plots:
+                        make_r_curves_plot(
+                            PHYLO_N_SITES,
+                            _strain_df,
+                            RECOVERY_RATE=RECOVERY_RATE_,
+                            palette=palette,
+                            teeplot_outattrs={
+                                "a": "r-curves",
+                                "n_sites": PHYLO_N_SITES,
+                                "n_steps": int(_phylo_df["Step"].max()) + 1,
+                                "replicate": _seed,
+                                "palette": palette,
+                                "pow": POW_,
+                            },
+                        )
                 for cmap in "rocket_r", "viridis", "magma_r":
                     make_density_heatmap_plot(
                         PHYLO_N_SITES,
@@ -1743,6 +1802,10 @@ def run_phylogeny_sweep(
             for palette in "rocket_r", "tab20", "tab10":
                 if SKIP_PLOTTING:
                     print("  (SKIP_PLOTTING=True — skipping strain graph)")
+                elif not do_per_strain_plots:
+                    print(
+                        "  (n_strains too large — skipping strain graph)",
+                    )
                 else:
                     make_strain_graph_plot(
                         PHYLO_N_SITES,
