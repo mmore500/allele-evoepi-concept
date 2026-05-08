@@ -33,7 +33,8 @@ def import_pkg(warnings):
         import cupy as cp
     except ImportError:
         warnings.warn(
-            "cupy import failed; falling back to numpy " "(GPU engine unavailable)",
+            "cupy import failed; falling back to numpy "
+            "(GPU engine unavailable)",
             stacklevel=2,
         )
         import numpy as cp
@@ -129,7 +130,9 @@ def configure_args(mo):
 
 @app.cell
 def configure_backend(ENGINE, cp, np):
-    use_cupy = ENGINE == "cupy"  # use cupy backend (GPU), otherwise numpy (CPU)
+    use_cupy = (
+        ENGINE == "cupy"
+    )  # use cupy backend (GPU), otherwise numpy (CPU)
     xp = [np, cp][use_cupy]
     return (xp,)
 
@@ -276,7 +279,9 @@ def def_simulate(
         else:
             genome_dtype = xp.uint16
 
-        def initialize_pop() -> (Tuple[xp.ndarray, xp.ndarray, xp.ndarray, xp.ndarray]):
+        def initialize_pop() -> (
+            Tuple[xp.ndarray, xp.ndarray, xp.ndarray, xp.ndarray]
+        ):
             """Initialize population statuses, genomes, and immune history."""
             pathogen_genomes = xp.zeros(shape=POP_SIZE, dtype=genome_dtype)
             host_immunities = xp.full(
@@ -284,7 +289,9 @@ def def_simulate(
                 fill_value=0.0,
                 dtype=xp.float32,
             )
-            host_statuses = xp.full(shape=POP_SIZE, fill_value=0, dtype=xp.uint8)
+            host_statuses = xp.full(
+                shape=POP_SIZE, fill_value=0, dtype=xp.uint8
+            )
             pathogen_markers = xp.random.randint(
                 low=0,
                 high=2**63,
@@ -309,7 +316,9 @@ def def_simulate(
             pathogen_genomes: xp.ndarray,
         ) -> Tuple[xp.ndarray, xp.ndarray]:
             """Seed the initial infection wave with the starting strain."""
-            seeded_indices = xp.random.choice(POP_SIZE, size=SEED_COUNT, replace=False)
+            seeded_indices = xp.random.choice(
+                POP_SIZE, size=SEED_COUNT, replace=False
+            )
             host_statuses[seeded_indices] = 1
             pathogen_genomes[seeded_indices] = 0  # wildtype
             return host_statuses, pathogen_genomes
@@ -326,15 +335,17 @@ def def_simulate(
             pathogen_bits = (
                 pathogen_genomes[:, None] >> xp.arange(N_SITES, dtype=xp.uint8)
             ) & 1
-            pathogen_alleles = (pathogen_bits[:, :, None] == xp.array([0, 1])).reshape(
-                -1, 2 * N_SITES
-            )
+            pathogen_alleles = (
+                pathogen_bits[:, :, None] == xp.array([0, 1])
+            ).reshape(-1, 2 * N_SITES)
 
             # active_susc = xp.where(
             #     pathogen_alleles, host_susceptibilities, 1.0
             # )
             # res = xp.prod(active_susc, axis=1)
-            active_susc = xp.where(pathogen_alleles, host_susceptibilities, np.nan)
+            active_susc = xp.where(
+                pathogen_alleles, host_susceptibilities, np.nan
+            )
             res = xp.nanmean(active_susc, axis=1)
             assert res.shape == (POP_SIZE,)
             return xp.pow(res, pow)
@@ -346,7 +357,8 @@ def def_simulate(
                 pathogen_genomes: xp.ndarray,
             ) -> xp.ndarray:
                 pathogen_bits = (
-                    pathogen_genomes[:, None] >> xp.arange(N_SITES, dtype=xp.uint8)
+                    pathogen_genomes[:, None]
+                    >> xp.arange(N_SITES, dtype=xp.uint8)
                 ) & 1
 
                 imm_reshaped = xp.reshape(host_immunities, (-1, N_SITES, 2))
@@ -354,17 +366,19 @@ def def_simulate(
                 idx_curr = pathogen_bits[:, :, None]
                 idx_opp = 1 - idx_curr
 
-                imm_curr = xp.take_along_axis(imm_reshaped, idx_curr, axis=2).squeeze(
-                    axis=2
-                )
-                imm_opp = xp.take_along_axis(imm_reshaped, idx_opp, axis=2).squeeze(
-                    axis=2
-                )
+                imm_curr = xp.take_along_axis(
+                    imm_reshaped, idx_curr, axis=2
+                ).squeeze(axis=2)
+                imm_opp = xp.take_along_axis(
+                    imm_reshaped, idx_opp, axis=2
+                ).squeeze(axis=2)
 
                 host_immunity_deltas = imm_curr - imm_opp
 
                 b_values = 1.0 + within_host_b * host_immunity_deltas
-                b_values = xp.where(xp.abs(b_values - 1.0) < 1e-7, 1.000001, b_values)
+                b_values = xp.where(
+                    xp.abs(b_values - 1.0) < 1e-7, 1.000001, b_values
+                )
 
                 return (MUTATION_RATE / (b_values - 1.0)) * (
                     xp.exp((b_values - 1.0) * within_host_t) - 1.0
@@ -378,7 +392,8 @@ def def_simulate(
             ) -> xp.ndarray:
                 n_infected = host_immunities.shape[0]
                 return (
-                    xp.ones((n_infected, 1), dtype=MUTATION_RATE.dtype) * MUTATION_RATE
+                    xp.ones((n_infected, 1), dtype=MUTATION_RATE.dtype)
+                    * MUTATION_RATE
                 )
 
         def update_waning(host_immunities: xp.ndarray) -> xp.ndarray:
@@ -402,11 +417,13 @@ def def_simulate(
             pathogen_bits = (
                 pathogen_genomes[:, None] >> xp.arange(N_SITES, dtype=xp.uint8)
             ) & 1
-            pathogen_alleles = (pathogen_bits[:, :, None] == xp.array([0, 1])).reshape(
-                -1, 2 * N_SITES
-            )
+            pathogen_alleles = (
+                pathogen_bits[:, :, None] == xp.array([0, 1])
+            ).reshape(-1, 2 * N_SITES)
 
-            assert np.all(pathogen_alleles[recovered_mask].sum(axis=1) == N_SITES)
+            assert np.all(
+                pathogen_alleles[recovered_mask].sum(axis=1) == N_SITES
+            )
 
             host_immunities[
                 pathogen_alleles.astype(bool) & recovered_mask[:, None]
@@ -462,7 +479,9 @@ def def_simulate(
                 pathogen_genomes[mutation_mask],
             )
             mutator_n = host_statuses[:MUTATOR_HOSTS_N].sum()
-            mprobs[:mutator_n] = xp.minimum(mprobs[:mutator_n] * MUTATOR_HOSTS_MX, 1.0)
+            mprobs[:mutator_n] = xp.minimum(
+                mprobs[:mutator_n] * MUTATOR_HOSTS_MX, 1.0
+            )
 
             mprobs[mprobs < MUTATION_THRESHOLD] = 0.0
 
@@ -470,9 +489,9 @@ def def_simulate(
                 mutation_occurs = (
                     xp.random.rand(mprobs.shape[0]) < mprobs[:, s]
                 ).astype(genome_dtype)
-                pathogen_genomes[mutation_mask] ^= (mutation_occurs << s).astype(
-                    genome_dtype
-                )
+                pathogen_genomes[mutation_mask] ^= (
+                    mutation_occurs << s
+                ).astype(genome_dtype)
 
             return pathogen_genomes
 
@@ -575,7 +594,9 @@ def def_simulate(
                 ) & 1
                 hw_per_host = infected_bits.sum(axis=1).astype(xp.int64)
                 hw_counts_arr = xp.bincount(hw_per_host, minlength=N_SITES + 1)
-                hw_prevalences = [float(c) / POP_SIZE for c in hw_counts_arr.tolist()]
+                hw_prevalences = [
+                    float(c) / POP_SIZE for c in hw_counts_arr.tolist()
+                ]
 
                 strain_per_host = pathogen_genomes[inf_mask].astype(xp.int64)
                 _u_strains, _u_counts = xp.unique(
@@ -635,11 +656,15 @@ def def_simulate(
                     dtype=xp.int64,
                 )
                 _site_idx = xp.arange(N_SITES, dtype=xp.int64)
-                _strain_bits = (_observed_arr[:, None] >> _site_idx[None, :]) & 1
-                _strain_cols = (2 * _site_idx[None, :] + _strain_bits).astype(xp.int64)
-                host_susc_2d = (1.0 - (IMMUNE_STRENGTH * host_immunities)).reshape(
-                    POP_SIZE, 2 * N_SITES
+                _strain_bits = (
+                    _observed_arr[:, None] >> _site_idx[None, :]
+                ) & 1
+                _strain_cols = (2 * _site_idx[None, :] + _strain_bits).astype(
+                    xp.int64
                 )
+                host_susc_2d = (
+                    1.0 - (IMMUNE_STRENGTH * host_immunities)
+                ).reshape(POP_SIZE, 2 * N_SITES)
                 strain_susc_per_host = host_susc_2d[:, _strain_cols].prod(
                     axis=2,
                 )
@@ -647,7 +672,9 @@ def def_simulate(
                 strain_susc_per_host = (
                     strain_susc_per_host * (host_statuses == 0)[:, None]
                 )
-                expected_R_per_strain = strain_susc_per_host.mean(axis=0) * CONTACT_RATE
+                expected_R_per_strain = (
+                    strain_susc_per_host.mean(axis=0) * CONTACT_RATE
+                )
                 expected_R_dict = dict(
                     zip(
                         map(int, _observed_arr.tolist()),
@@ -1008,7 +1035,9 @@ def def_make_phylogeny_plot(
             sns.despine(ax=ax_hw, left=True, bottom=True, top=False)
 
             ax_hw.legend(
-                handles=[_hw_handle(w, label) for w, label in hw_legend_entries],
+                handles=[
+                    _hw_handle(w, label) for w, label in hw_legend_entries
+                ],
                 title="Hamming weight",
                 loc="center left",
                 bbox_to_anchor=(1.02, 0.5),
@@ -1069,10 +1098,14 @@ def def_make_strain_graph_plot(ig, iplotx, np, pathlib, plt, sns, tp):
         strains, counts = np.unique(genomes, return_counts=True)
         n_strains = int(strains.size)
         if n_strains < 2:
-            print(f"  (only {n_strains} strain --- skipping strain graph plot)")
+            print(
+                f"  (only {n_strains} strain --- skipping strain graph plot)"
+            )
             return
 
-        hamming_weights = np.array([bin(int(s)).count("1") for s in strains], dtype=int)
+        hamming_weights = np.array(
+            [bin(int(s)).count("1") for s in strains], dtype=int
+        )
 
         xor = strains[:, None] ^ strains[None, :]
         dists = np.zeros_like(xor, dtype=np.int32)
@@ -1095,7 +1128,9 @@ def def_make_strain_graph_plot(ig, iplotx, np, pathlib, plt, sns, tp):
             snapshots.append((n, dict(cumulative)))
 
         palette_colors = sns.color_palette(palette, N_SITES + 1)
-        node_facecolors = [(*palette_colors[int(hw)], 0.8) for hw in hamming_weights]
+        node_facecolors = [
+            (*palette_colors[int(hw)], 0.8) for hw in hamming_weights
+        ]
 
         max_count = int(counts.max())
         sizes = 4.0 + 18.0 * np.sqrt(counts / max_count)
@@ -1139,7 +1174,9 @@ def def_make_strain_graph_plot(ig, iplotx, np, pathlib, plt, sns, tp):
                 # for higher-n edges; n>1 edges drawn dashed to distinguish
                 # them from direct mutational neighbors.
                 widths = [3.0 / edges_dict[e] for e in edges]
-                linestyles = ["-" if edges_dict[e] == 1 else "--" for e in edges]
+                linestyles = [
+                    "-" if edges_dict[e] == 1 else "--" for e in edges
+                ]
 
                 g_plot = ig.Graph(n=n_strains)
                 if edges:
@@ -1322,7 +1359,9 @@ def def_make_allele_curves_plot(allele_palette, np, pathlib, plt, sns, tp):
         # over strains carrying that allele at that site.
         unique_steps = sorted(strain_df["Step"].unique())
         step_to_idx = {t: i for i, t in enumerate(unique_steps)}
-        prev_per_allele = np.zeros((len(unique_steps), N_SITES, 2), dtype=float)
+        prev_per_allele = np.zeros(
+            (len(unique_steps), N_SITES, 2), dtype=float
+        )
         for s in range(n_strains):
             sub = strain_df[strain_df["strain"] == s]
             for _, row in sub.iterrows():
@@ -1431,7 +1470,9 @@ def def_make_r_curves_plot(np, pathlib, pd, plt, sns, strain_palette, tp):
         """
         n_strains = 1 << N_SITES
 
-        unique_steps = np.array(sorted(strain_df["Step"].unique()), dtype=float)
+        unique_steps = np.array(
+            sorted(strain_df["Step"].unique()), dtype=float
+        )
         T = len(unique_steps)
         step_to_idx = {t: i for i, t in enumerate(unique_steps.tolist())}
 
@@ -1499,7 +1540,9 @@ def def_make_r_curves_plot(np, pathlib, pd, plt, sns, strain_palette, tp):
                     linewidth=1.5,
                     label=label,
                 )
-            ax_expected.axhline(1.0, color="gray", linestyle=":", linewidth=0.8)
+            ax_expected.axhline(
+                1.0, color="gray", linestyle=":", linewidth=0.8
+            )
             ax_expected.set_ylabel("expected R")
             ax_expected.set_ylim(bottom=0.0)
             sns.despine(ax=ax_expected)
@@ -1563,7 +1606,9 @@ def def_make_density_heatmap_plot(np, pathlib, plt, sns, tp):
         """
         n_strains = 1 << N_SITES
 
-        unique_steps = np.array(sorted(strain_df["Step"].unique()), dtype=np.int64)
+        unique_steps = np.array(
+            sorted(strain_df["Step"].unique()), dtype=np.int64
+        )
         T = len(unique_steps)
         final_step = int(unique_steps.max())
 
@@ -1627,7 +1672,8 @@ def def_make_density_heatmap_plot(np, pathlib, plt, sns, tp):
             ax.set_yticks(np.arange(N_SITES + 1))
             ax.set_xlabel("Time")
             ax.set_ylabel(
-                "bits in common with\nend-state strain " f"{end_strain:0{N_SITES}b}"
+                "bits in common with\nend-state strain "
+                f"{end_strain:0{N_SITES}b}"
             )
             cbar = fig.colorbar(im, ax=ax, pad=0.02)
             cbar.set_label("Fraction of circulating strains")
@@ -1652,7 +1698,9 @@ def _(np, pathlib, pd, sns, tp, warnings):
         """
         n_strains = 1 << N_SITES
 
-        unique_steps = np.array(sorted(strain_df["Step"].unique()), dtype=np.int64)
+        unique_steps = np.array(
+            sorted(strain_df["Step"].unique()), dtype=np.int64
+        )
         T = len(unique_steps)
         final_step = int(unique_steps.max())
 
@@ -1695,7 +1743,9 @@ def _(np, pathlib, pd, sns, tp, warnings):
         # 4. Construct explicit bin edges and convert to LIST to prevent Seaborn array evaluation bug
         if len(unique_steps) > 1:
             half_step = (unique_steps[1] - unique_steps[0]) / 2.0
-            np.append(unique_steps - half_step, unique_steps[-1] + half_step).tolist()
+            np.append(
+                unique_steps - half_step, unique_steps[-1] + half_step
+            ).tolist()
         else:
             strain_df["Step"].max() + 1  # Fallback
 
@@ -2031,11 +2081,19 @@ def run_phylogeny_sweep(
             gc.collect()
 
     traj_df_all = (
-        pd.concat(traj_chunks, ignore_index=True) if traj_chunks else pd.DataFrame()
+        pd.concat(traj_chunks, ignore_index=True)
+        if traj_chunks
+        else pd.DataFrame()
     )
-    hw_df_all = pd.concat(hw_chunks, ignore_index=True) if hw_chunks else pd.DataFrame()
+    hw_df_all = (
+        pd.concat(hw_chunks, ignore_index=True)
+        if hw_chunks
+        else pd.DataFrame()
+    )
     strain_df_all = (
-        pd.concat(strain_chunks, ignore_index=True) if strain_chunks else pd.DataFrame()
+        pd.concat(strain_chunks, ignore_index=True)
+        if strain_chunks
+        else pd.DataFrame()
     )
     records_df_all = (
         pd.concat(records_chunks, ignore_index=True)
@@ -2043,7 +2101,9 @@ def run_phylogeny_sweep(
         else pd.DataFrame()
     )
     phylo_df_all = (
-        pd.concat(phylo_chunks, ignore_index=True) if phylo_chunks else pd.DataFrame()
+        pd.concat(phylo_chunks, ignore_index=True)
+        if phylo_chunks
+        else pd.DataFrame()
     )
 
     traj_path = out_dir / f"a=traj+what={nbname}+ext=.pqt"
@@ -2059,7 +2119,9 @@ def run_phylogeny_sweep(
     print(f"wrote trajectory parquet ({len(traj_df_all)} rows): {traj_path}")
     print(f"wrote hw parquet ({len(hw_df_all)} rows): {hw_path}")
     print(f"wrote strain parquet ({len(strain_df_all)} rows): {strain_path}")
-    print(f"wrote records parquet ({len(records_df_all)} rows): {records_path}")
+    print(
+        f"wrote records parquet ({len(records_df_all)} rows): {records_path}"
+    )
     print(f"wrote phylogeny parquet ({len(phylo_df_all)} rows): {phylo_path}")
     return
 
