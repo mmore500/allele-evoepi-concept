@@ -1275,6 +1275,122 @@ def def_make_strain_curves_plot(np, pathlib, plt, sns, strain_palette, tp):
 
 
 @app.cell
+def def_make_strain_summary_plot(np, pathlib, plt, sns, strain_palette, tp):
+    def make_strain_summary_plot(
+        N_SITES: int,
+        traj_df,
+        strain_df,
+        RECOVERY_RATE: float,
+        palette: str = "husl",
+        teeplot_outattrs: dict = {},
+    ) -> None:
+        """Three-panel stacked figure: top = per-strain expected R
+        (R0-like, dotted), middle = per-strain population-average
+        susceptibility (dashed), bottom = per-strain prevalence
+        ("case load", solid). Expected R is `strain_df["expected_R"]`
+        scaled by the discrete-time R0 multiplier
+        `(1 - RECOVERY_RATE) / RECOVERY_RATE` (see make_r_curves_plot
+        for the off-by-one rationale). Strains are color-coded by
+        Hamming weight (hue) with lightness disambiguating strains
+        of the same weight; R = 1 is drawn as a reference line.
+        """
+        n_strains = 1 << N_SITES
+        steps = traj_df["Step"].to_numpy()
+
+        susc_by_site_bit = np.empty((len(traj_df), N_SITES, 2), dtype=float)
+        for site in range(N_SITES):
+            for bit in range(2):
+                susc_by_site_bit[:, site, bit] = traj_df[
+                    f"Susc_S{site}_B{bit}"
+                ].to_numpy()
+        susc_per_strain = np.ones((len(traj_df), n_strains), dtype=float)
+        for s in range(n_strains):
+            for site in range(N_SITES):
+                bit = (s >> site) & 1
+                susc_per_strain[:, s] *= susc_by_site_bit[:, site, bit]
+
+        unique_steps = np.array(
+            sorted(strain_df["Step"].unique()), dtype=float
+        )
+        T = len(unique_steps)
+        step_to_idx = {t: i for i, t in enumerate(unique_steps.tolist())}
+        expected_R_per_strain = np.zeros((T, n_strains), dtype=float)
+        for _, row in strain_df.iterrows():
+            i = step_to_idx[row["Step"]]
+            s = int(row["strain"])
+            expected_R_per_strain[i, s] = float(row.get("expected_R", 0.0))
+        r0_multiplier = (1.0 - RECOVERY_RATE) / RECOVERY_RATE
+        expected_R_per_strain = expected_R_per_strain * r0_multiplier
+
+        palette_colors = strain_palette(N_SITES, base_palette=palette)
+
+        with tp.teed(
+            plt.subplots,
+            nrows=3,
+            ncols=1,
+            figsize=(8, 8),
+            sharex=True,
+            gridspec_kw={"hspace": 0.05},
+            teeplot_outattrs=teeplot_outattrs,
+            teeplot_show=True,
+            teeplot_subdir=pathlib.Path(__file__).stem,
+        ) as (fig, axes):
+            ax_r, ax_susc, ax_prev = axes
+
+            for s in range(n_strains):
+                color = palette_colors[s]
+                label = f"{s:0{N_SITES}b}"
+                ax_r.plot(
+                    unique_steps,
+                    expected_R_per_strain[:, s],
+                    color=color,
+                    linestyle=":",
+                    linewidth=1.5,
+                    label=label,
+                )
+                ax_susc.plot(
+                    steps,
+                    susc_per_strain[:, s],
+                    color=color,
+                    linestyle="--",
+                    linewidth=1.5,
+                )
+                strain_s = strain_df[strain_df["strain"] == s]
+                strain_s = strain_s.sort_values("Step")
+                ax_prev.plot(
+                    strain_s["Step"].to_numpy(),
+                    strain_s["count"].to_numpy(),
+                    color=color,
+                    linestyle="-",
+                    linewidth=1.5,
+                )
+
+            ax_r.axhline(1.0, color="gray", linestyle=":", linewidth=0.8)
+            ax_r.set_ylabel("expected R")
+            ax_r.set_ylim(bottom=0.0)
+            ax_susc.set_ylabel("Population Susceptibility")
+            ax_susc.set_ylim(0.0, 1.0)
+            ax_prev.set_ylabel("Case Load")
+            ax_prev.set_xlabel("Time")
+            ax_prev.set_ylim(bottom=0.0)
+
+            ax_r.legend(
+                title="strain",
+                loc="center left",
+                bbox_to_anchor=(1.02, 0.5),
+                frameon=False,
+                handletextpad=0.4,
+                ncol=1 if n_strains <= 8 else 2,
+                fontsize=8,
+            )
+            sns.despine(ax=ax_r)
+            sns.despine(ax=ax_susc)
+            sns.despine(ax=ax_prev)
+
+    return (make_strain_summary_plot,)
+
+
+@app.cell
 def def_make_allele_curves_plot(allele_palette, np, pathlib, plt, sns, tp):
     def make_allele_curves_plot(
         N_SITES: int,
@@ -1641,6 +1757,7 @@ def run_phylogeny_sweep(
     make_r_curves_plot,
     make_strain_curves_plot,
     make_strain_graph_plot,
+    make_strain_summary_plot,
     pathlib,
     pd,
     reconstruct_phylogeny,
@@ -1776,6 +1893,21 @@ def run_phylogeny_sweep(
                             palette=palette,
                             teeplot_outattrs={
                                 "a": "r-curves",
+                                "n_sites": PHYLO_N_SITES,
+                                "n_steps": int(_phylo_df["Step"].max()) + 1,
+                                "replicate": _seed,
+                                "palette": palette,
+                                "pow": POW_,
+                            },
+                        )
+                        make_strain_summary_plot(
+                            PHYLO_N_SITES,
+                            _phylo_df,
+                            _strain_df,
+                            RECOVERY_RATE=RECOVERY_RATE_,
+                            palette=palette,
+                            teeplot_outattrs={
+                                "a": "strain-summary",
                                 "n_sites": PHYLO_N_SITES,
                                 "n_steps": int(_phylo_df["Step"].max()) + 1,
                                 "replicate": _seed,
