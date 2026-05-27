@@ -133,8 +133,7 @@ def configure_backend(ENGINE, cp, np):
 
 @app.cell(hide_code=True)
 def delimit_simulation(mo):
-    mo.md(
-        """
+    mo.md("""
     ## Simulation Implementation
 
     This is a **founder** notebook: it runs a *single replicate* of the
@@ -166,11 +165,21 @@ def delimit_simulation(mo):
     strains is logged **as a raw case count** --- the number of
     currently-infected hosts at each Hamming weight --- in the
     `n_cases` column of the `hw` dataframe, alongside the inherited
-    population-fraction `count` column. Every output dataframe is also
-    stamped with the simulation parameters as constant-valued columns
-    and a `replicate_uid` generated with the standard-library `uuid`
-    module, so rows from a run are self-describing and uniquely
-    identifiable.
+    population-fraction `count` column. The `strain` dataframe likewise
+    gets a per-genome raw case count `n_cases` (number of currently-
+    infected hosts carrying each genome) plus `n_new_infections` (new
+    infections caused by each genome this step, pre-mutation). Every
+    output dataframe is also stamped with the simulation parameters as
+    constant-valued columns and a `replicate_uid` generated with the
+    standard-library `uuid` module, so rows from a run are self-
+    describing and uniquely identifiable.
+
+    `update_recoveries()` is patched to **prevent extinction**: if a
+    step's recovery roll would clear the last remaining infection, one
+    of the would-be-recovered hosts is exempted so the run never drops
+    to zero circulating cases. The rescued host continues as an
+    ordinary infected host into the next step without gaining immunity
+    against its current strain.
 
     When the strain count `2 ** N_SITES` exceeds 16, the per-strain
     figures (strain curves, R-curves, strain summary, strain graph) are
@@ -230,8 +239,7 @@ def delimit_simulation(mo):
 
     The vectorized deposit pattern is adapted from
     https://github.com/mmore500/hstrat-synthesis (see `pylib/track_ca.py`).
-    """
-    )
+    """)
     return
 
 
@@ -431,6 +439,22 @@ def def_simulate(
                 POP_SIZE
             ) > 1 - RECOVERY_RATE
 
+            # Prevent extinction: if every currently-infected host would
+            # recover this step, exempt one of the would-be-recovered
+            # hosts so at least one infection always remains. The
+            # rescued host's `recovered_mask` entry is cleared, so its
+            # genome's per-site immunities aren't bumped to 1.0 and its
+            # `host_statuses` stays positive --- it continues as an
+            # ordinary infected host into the next step.
+            infected_pre = host_statuses >= 1
+            if bool(xp.any(infected_pre)) and not bool(
+                xp.any(infected_pre & ~recovered_mask)
+            ):
+                rescue_idx = int(
+                    xp.where(infected_pre & recovered_mask)[0][0],
+                )
+                recovered_mask[rescue_idx] = False
+
             pathogen_bits = (
                 pathogen_genomes[:, None] >> xp.arange(N_SITES, dtype=xp.uint8)
             ) & 1
@@ -609,6 +633,11 @@ def def_simulate(
             # fraction.
             hw_case_counts: List[int] = [0] * (N_SITES + 1)
             strain_prevalences: List[float] = [0.0] * n_strains
+            # Raw per-genome infection counts (currently-infected hosts
+            # carrying each strain), recorded alongside the population-
+            # fraction `count` so the strain dataframe carries the
+            # absolute per-genome case load.
+            strain_case_counts: List[int] = [0] * n_strains
 
             if xp.any(inf_mask):
                 infected_bits = (
@@ -625,20 +654,26 @@ def def_simulate(
                 strain_counts_arr = xp.bincount(
                     strain_per_host, minlength=n_strains
                 )
+                _strain_counts_list = strain_counts_arr.tolist()
+                strain_case_counts = [int(c) for c in _strain_counts_list]
                 strain_prevalences = [
-                    float(c) / POP_SIZE for c in strain_counts_arr.tolist()
+                    float(c) / POP_SIZE for c in _strain_counts_list
                 ]
 
-            # Per-strain new infections this step (population fraction).
+            # Per-strain new infections this step (raw count of newly-
+            # infected hosts and the equivalent population fraction).
             # Captured pre-mutation in update_simulation so the strain
             # label is the strain that actually transmitted.
+            new_strain_n_cases: List[int] = [0] * n_strains
             if new_strain_genomes.size > 0:
                 new_strain_counts_arr = xp.bincount(
                     new_strain_genomes.astype(xp.int64),
                     minlength=n_strains,
                 )
+                _new_strain_list = new_strain_counts_arr.tolist()
+                new_strain_n_cases = [int(c) for c in _new_strain_list]
                 new_strain_counts = [
-                    float(c) / POP_SIZE for c in new_strain_counts_arr.tolist()
+                    float(c) / POP_SIZE for c in _new_strain_list
                 ]
             else:
                 new_strain_counts = [0.0] * n_strains
@@ -695,7 +730,9 @@ def def_simulate(
                         "Seed": seed,
                         "strain": s,
                         "count": count,
+                        "n_cases": strain_case_counts[s],
                         "new_infections": new_strain_counts[s],
+                        "n_new_infections": new_strain_n_cases[s],
                         "expected_R": expected_R_list[s],
                     }
                 )
@@ -808,8 +845,7 @@ def def_simulate(
 
 @app.cell(hide_code=True)
 def delimit_reconstruct(mo):
-    mo.md(
-        """
+    mo.md("""
     ## Surface-Annotation Reconstruction
 
     Given the snapshot records emitted by `simulate(..., track_phylogeny=
@@ -817,8 +853,7 @@ def delimit_reconstruct(mo):
     `hstrat.dataframe.surface_postprocess_trie` to estimate the phylogenetic
     tree. We use `AssignOriginTimeNodeRankTriePostprocessor(t0="dstream_S")`
     so that origin times line up with simulation step numbers.
-    """
-    )
+    """)
     return
 
 
@@ -851,14 +886,12 @@ def def_reconstruct_phylogeny(gc, hstrat, pd, pl):
 
 @app.cell(hide_code=True)
 def delimit_phylogeny(mo):
-    mo.md(
-        """
+    mo.md("""
     ## Surface-Reconstructed Phylogeny
 
     Sweep `N_SITES` over a few values and render the surface-reconstructed
     phylogeny next to the absolute-prevalence and Hamming-weight stackplots.
-    """
-    )
+    """)
     return
 
 
@@ -1843,8 +1876,7 @@ def def_make_hamming_weight_plot(pathlib, plt, sns, tp):
 
 @app.cell(hide_code=True)
 def delimit_run(mo):
-    mo.md(
-        """
+    mo.md("""
     ## Founder Replicate Run
 
     Run a single replicate for the command-line `seed` / `N_SITES`
@@ -1852,8 +1884,7 @@ def delimit_run(mo):
     onto every output dataframe, write the dataframes to parquet, and
     render the Hamming-weight case-count stackplot together with the
     inherited strain/allele/R/phylogeny figures.
-    """
-    )
+    """)
     return
 
 
