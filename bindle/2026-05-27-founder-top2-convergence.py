@@ -265,5 +265,269 @@ def plot_fraction_heatmap(frac_df, np, pathlib, plt, sns, tp):
     return
 
 
+@app.cell(hide_code=True)
+def delimit_diff(mo):
+    mo.md("""
+    ## Stacked Histogram by Top-2 Hamming-Weight Difference
+
+    Per-replicate **Hamming-weight gap** between the top-two end-state
+    bins, `hw_diff = |hw_top1 - hw_top2|`. A gap of 0 means the
+    replicate converged to a single dominant Hamming weight (all
+    sub-dominant cases share the same weight); a gap of 1 means the
+    second-most-populous bin sits one mutation away from the dominant
+    one; larger gaps mean the top-two cluster pair spans further
+    apart. We plot the **percent of replicates** (out of 20) at each
+    `hw_diff` value, stacked, per `N_SITES` condition.
+    """)
+    return
+
+
+@app.cell
+def plot_diff_stacked_hist(np, pathlib, plt, sns, top2_df, tp):
+    # Possible Hamming-weight differences range from 0 to max(N_SITES)
+    # since each top bin's hw is in [0, N_SITES]. Set the hue order
+    # explicitly so stack ordering and the legend stay consistent
+    # across N_SITES conditions (smaller diffs at the bottom).
+    _max_n_sites = int(top2_df["n_sites"].max())
+    _hue_order = list(range(_max_n_sites + 1))
+
+    _diff_df = top2_df.assign(
+        hw_diff=(top2_df["hw_top1"] - top2_df["hw_top2"]).abs(),
+    )
+    _totals = _diff_df.groupby("n_sites").size()
+    _pct_wide = (
+        _diff_df.groupby(["n_sites", "hw_diff"]).size().unstack(fill_value=0)
+    )
+    _pct_wide = _pct_wide.div(_totals, axis=0).mul(100.0)
+    _pct_wide = _pct_wide.reindex(columns=_hue_order, fill_value=0.0)
+    print("percent of replicates by (n_sites, hw_diff):")
+    print(_pct_wide.round(1).to_string())
+
+    _palette = sns.color_palette("rocket_r", n_colors=len(_hue_order))
+    _n_conditions = len(_pct_wide.index)
+    _bar_x = np.arange(_n_conditions)
+
+    with tp.teed(
+        plt.subplots,
+        figsize=(1.4 * _n_conditions + 2.0, 4.2),
+        teeplot_outattrs={"a": "top2-hw-diff-stacked-pct"},
+        teeplot_show=True,
+        teeplot_subdir=pathlib.Path(__file__).stem,
+    ) as (_fig, _ax):
+        _bottom = np.zeros(_n_conditions, dtype=float)
+        for _hw_diff, _color in zip(_hue_order, _palette):
+            _heights = _pct_wide[_hw_diff].to_numpy()
+            _ax.bar(
+                _bar_x,
+                _heights,
+                bottom=_bottom,
+                color=_color,
+                label=f"diff = {_hw_diff}",
+                edgecolor="white",
+                linewidth=0.5,
+            )
+            _bottom = _bottom + _heights
+        _ax.set_xticks(_bar_x)
+        _ax.set_xticklabels([str(int(_ns)) for _ns in _pct_wide.index])
+        _ax.set_xlabel("N_SITES")
+        _ax.set_ylabel("% of replicates")
+        _ax.set_ylim(0, 100)
+        # `reverse=True` (matplotlib >= 3.7) shows the largest hw_diff
+        # entry at the top of the legend, matching the stack top-down.
+        _handles, _labels = _ax.get_legend_handles_labels()
+        _ax.legend(
+            _handles[::-1],
+            _labels[::-1],
+            title="|hw_top1 - hw_top2|",
+            loc="center left",
+            bbox_to_anchor=(1.02, 0.5),
+            frameon=False,
+            handletextpad=0.4,
+        )
+        sns.despine(ax=_ax)
+    return
+
+
+@app.cell(hide_code=True)
+def delimit_tables(mo):
+    mo.md("""
+    ## Per-N_SITES Outcome Tables
+
+    One table per `N_SITES` condition listing every observed
+    end-state `(hw_top1, hw_top2)` pair with the percent of
+    replicates that converged there and the Hamming-weight gap
+    `hw_diff`. Rows are sorted by decreasing percent.
+    """)
+    return
+
+
+@app.cell
+def show_tables(frac_df, mo):
+    _pct_df = frac_df.assign(
+        hw_diff=(frac_df["hw_top1"] - frac_df["hw_top2"]).abs(),
+        pct=(frac_df["fraction"] * 100.0).round(2),
+    )[
+        [
+            "n_sites",
+            "hw_top1",
+            "hw_top2",
+            "hw_diff",
+            "n_reps",
+            "n_total",
+            "pct",
+        ]
+    ]
+
+    _panels = []
+    for _ns in sorted(_pct_df["n_sites"].unique().tolist()):
+        _sub = (
+            _pct_df[_pct_df["n_sites"] == _ns]
+            .sort_values("pct", ascending=False)
+            .reset_index(drop=True)
+        )
+        print(f"\nN_SITES = {int(_ns)}")
+        print(_sub.to_string(index=False))
+        _panels.append(mo.md(f"### N_SITES = {int(_ns)}"))
+        _panels.append(mo.ui.table(_sub, selection=None))
+    mo.vstack(_panels)
+    return
+
+
+@app.cell(hide_code=True)
+def delimit_offset(mo):
+    mo.md("""
+    ## Stacked Histogram by Top-1 Hamming Offset
+
+    For each replicate, take the **single most-populous** Hamming-
+    weight bin at the final step (`hw_top1`) and report its
+    **hamming offset** `min(hw, N_SITES - hw)`: the smaller of the
+    two distances from `hw` to the nearest "extreme" Hamming weight
+    (`0` = pure founder/wildtype, `N_SITES` = its bitwise
+    complement). An offset of `0` means the dominant strain at end
+    is at one of the two extremes; an offset of `floor(N_SITES /
+    2)` means it sits as far from either extreme as the bit budget
+    allows. Plot the **percent of replicates** at each offset value,
+    stacked per `N_SITES`, with a fixed hue order across panels.
+    """)
+    return
+
+
+@app.cell
+def plot_offset_stacked_hist(np, pathlib, plt, sns, top2_df, tp):
+    _offset_df = top2_df.assign(
+        hamming_offset=np.minimum(
+            top2_df["hw_top1"],
+            top2_df["n_sites"] - top2_df["hw_top1"],
+        ),
+    )
+    _max_n_sites = int(top2_df["n_sites"].max())
+    _max_offset = _max_n_sites // 2
+    _hue_order = list(range(_max_offset + 1))
+
+    _totals = _offset_df.groupby("n_sites").size()
+    _pct_wide = (
+        _offset_df.groupby(["n_sites", "hamming_offset"])
+        .size()
+        .unstack(fill_value=0)
+    )
+    _pct_wide = _pct_wide.div(_totals, axis=0).mul(100.0)
+    _pct_wide = _pct_wide.reindex(columns=_hue_order, fill_value=0.0)
+    print("percent of replicates by (n_sites, hamming_offset):")
+    print(_pct_wide.round(1).to_string())
+
+    _palette = sns.color_palette("mako_r", n_colors=len(_hue_order))
+    _n_conditions = len(_pct_wide.index)
+    _bar_x = np.arange(_n_conditions)
+
+    with tp.teed(
+        plt.subplots,
+        figsize=(1.4 * _n_conditions + 2.0, 4.2),
+        teeplot_outattrs={"a": "top1-hamming-offset-stacked-pct"},
+        teeplot_show=True,
+        teeplot_subdir=pathlib.Path(__file__).stem,
+    ) as (_fig, _ax):
+        _bottom = np.zeros(_n_conditions, dtype=float)
+        for _off, _color in zip(_hue_order, _palette):
+            _heights = _pct_wide[_off].to_numpy()
+            _ax.bar(
+                _bar_x,
+                _heights,
+                bottom=_bottom,
+                color=_color,
+                label=f"offset = {_off}",
+                edgecolor="white",
+                linewidth=0.5,
+            )
+            _bottom = _bottom + _heights
+        _ax.set_xticks(_bar_x)
+        _ax.set_xticklabels([str(int(_ns)) for _ns in _pct_wide.index])
+        _ax.set_xlabel("N_SITES")
+        _ax.set_ylabel("% of replicates")
+        _ax.set_ylim(0, 100)
+        _handles, _labels = _ax.get_legend_handles_labels()
+        _ax.legend(
+            _handles[::-1],
+            _labels[::-1],
+            title="min(hw_top1, N_SITES - hw_top1)",
+            loc="center left",
+            bbox_to_anchor=(1.02, 0.5),
+            frameon=False,
+            handletextpad=0.4,
+        )
+        sns.despine(ax=_ax)
+    return
+
+
+@app.cell(hide_code=True)
+def delimit_offset_tables(mo):
+    mo.md("""
+    ## Per-N_SITES Top-1 Hamming-Offset Tables
+
+    One table per `N_SITES` condition listing each observed value of
+    the top-1 Hamming weight `hw_top1`, its `hamming_offset =
+    min(hw_top1, N_SITES - hw_top1)`, the number of replicates at
+    that value, and the percent of replicates. Sorted by descending
+    percent.
+    """)
+    return
+
+
+@app.cell
+def show_offset_tables(mo, np, top2_df):
+    _offset_full = top2_df.assign(
+        hamming_offset=np.minimum(
+            top2_df["hw_top1"],
+            top2_df["n_sites"] - top2_df["hw_top1"],
+        ),
+    )
+    _counts = (
+        _offset_full.groupby(["n_sites", "hw_top1", "hamming_offset"])
+        .size()
+        .rename("n_reps")
+        .reset_index()
+    )
+    _totals = (
+        _offset_full.groupby("n_sites").size().rename("n_total").reset_index()
+    )
+    _offset_pct = _counts.merge(_totals, on="n_sites")
+    _offset_pct["pct"] = (
+        _offset_pct["n_reps"] / _offset_pct["n_total"] * 100.0
+    ).round(2)
+
+    _panels = []
+    for _ns in sorted(_offset_pct["n_sites"].unique().tolist()):
+        _sub = (
+            _offset_pct[_offset_pct["n_sites"] == _ns]
+            .sort_values("pct", ascending=False)
+            .reset_index(drop=True)
+        )
+        print(f"\nN_SITES = {int(_ns)}")
+        print(_sub.to_string(index=False))
+        _panels.append(mo.md(f"### N_SITES = {int(_ns)}"))
+        _panels.append(mo.ui.table(_sub, selection=None))
+    mo.vstack(_panels)
+    return
+
+
 if __name__ == "__main__":
     app.run()
