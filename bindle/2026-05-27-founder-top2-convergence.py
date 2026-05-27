@@ -18,11 +18,12 @@ def import_pkg():
     import numpy as np
     import pandas as pd
     import requests
+    from scipy import stats as sps
     import seaborn as sns
     from teeplot import teeplot as tp
     from watermark import watermark
 
-    return mo, np, pd, plt, requests, sns, tp, watermark
+    return mo, np, pd, plt, requests, sns, sps, tp, watermark
 
 
 @app.cell(hide_code=True)
@@ -540,6 +541,140 @@ def show_offset_tables(mo, np, top2_df):
         _panels.append(mo.md(f"### N_SITES = {int(_ns)}"))
         _panels.append(mo.ui.table(_sub, selection=None))
     mo.vstack(_panels)
+    return
+
+
+@app.cell(hide_code=True)
+def delimit_appearance(mo):
+    mo.md(
+        """
+    ## First Appearance of Max-Hamming-Weight Strain vs. Outcome
+
+    For each replicate, find the **first simulation step** at which
+    any case sits at the maximum Hamming weight `hw == N_SITES` ---
+    the all-ones `1111...` strain, the bitwise complement of the
+    founder. Replicates where the max-hw strain never appears are
+    **censored to the simulation horizon** `N_STEPS` (treated as if
+    it appeared at the very last step), per the analysis spec.
+
+    Plot the resulting first-appearance step against the end-state
+    outcome `hw_top1` (most-populous Hamming weight at the final
+    step) as a per-`N_SITES` `sns.lmplot` with a fitted regression
+    line in each panel, and run a Spearman rank correlation per
+    condition (plus pooled) to test whether earlier emergence of
+    the all-ones strain predicts a higher end-state Hamming weight.
+    """
+    )
+    return
+
+
+@app.cell
+def compute_first_appearance(hw_df, top2_df):
+    # Earliest step at which the all-ones strain (hw == n_sites) has
+    # any circulating cases, per replicate.
+    _max_hw_mask = (hw_df["hw"] == hw_df["n_sites"]) & (hw_df["n_cases"] > 0)
+    _first = (
+        hw_df[_max_hw_mask]
+        .groupby("replicate_uid")["Step"]
+        .min()
+        .rename("first_max_hw_step")
+    )
+
+    _per_rep_meta = (
+        hw_df[["replicate_uid", "n_steps"]]
+        .drop_duplicates()
+        .set_index("replicate_uid")["n_steps"]
+    )
+
+    appearance_df = (
+        top2_df[["replicate_uid", "n_sites", "hw_top1"]]
+        .merge(_first, on="replicate_uid", how="left")
+        .merge(_per_rep_meta, on="replicate_uid", how="left")
+    )
+    # Censor non-appearance to the simulation horizon N_STEPS.
+    appearance_df["censored"] = appearance_df["first_max_hw_step"].isna()
+    appearance_df["first_max_hw_step"] = (
+        appearance_df["first_max_hw_step"]
+        .fillna(appearance_df["n_steps"])
+        .astype(int)
+    )
+
+    print(
+        "censored (never appeared) replicates: "
+        f"{int(appearance_df['censored'].sum())} / {len(appearance_df)}"
+    )
+    print("censored per n_sites:")
+    print(appearance_df.groupby("n_sites")["censored"].sum())
+    print(appearance_df.head().to_string(index=False))
+    return (appearance_df,)
+
+
+@app.cell
+def plot_appearance_vs_outcome(appearance_df, pathlib, sns, tp):
+    with tp.teed(
+        sns.lmplot,
+        data=appearance_df,
+        x="first_max_hw_step",
+        y="hw_top1",
+        col="n_sites",
+        col_wrap=2,
+        height=3.0,
+        aspect=1.2,
+        x_jitter=20.0,
+        y_jitter=0.15,
+        scatter_kws={"alpha": 0.65, "s": 36},
+        line_kws={"color": "black"},
+        teeplot_outattrs={"a": "first-max-hw-vs-hw-top1"},
+        teeplot_show=True,
+        teeplot_subdir=pathlib.Path(__file__).stem,
+    ) as _g:
+        _g.set_axis_labels(
+            "first step max-hw strain appears\n(censored at N_STEPS)",
+            "hw_top1 (end-state)",
+        )
+        _g.set_titles("N_SITES = {col_name}")
+        for _ax in _g.axes.flat:
+            sns.despine(ax=_ax)
+    return
+
+
+@app.cell
+def first_appearance_stats(appearance_df, mo, pd, sps):
+    _rows = []
+    for _ns in sorted(appearance_df["n_sites"].unique().tolist()):
+        _sub = appearance_df[appearance_df["n_sites"] == _ns]
+        _x = _sub["first_max_hw_step"].to_numpy()
+        _y = _sub["hw_top1"].to_numpy()
+        _rho, _pval = sps.spearmanr(_x, _y)
+        _rows.append(
+            {
+                "n_sites": str(int(_ns)),
+                "n": len(_sub),
+                "n_censored": int(_sub["censored"].sum()),
+                "spearman_rho": round(float(_rho), 3),
+                "p_value": float(_pval),
+            },
+        )
+    _rho_all, _pval_all = sps.spearmanr(
+        appearance_df["first_max_hw_step"],
+        appearance_df["hw_top1"],
+    )
+    _rows.append(
+        {
+            "n_sites": "pooled",
+            "n": len(appearance_df),
+            "n_censored": int(appearance_df["censored"].sum()),
+            "spearman_rho": round(float(_rho_all), 3),
+            "p_value": float(_pval_all),
+        },
+    )
+    stat_df = pd.DataFrame(_rows)
+    print(
+        "Spearman rank correlation: first_max_hw_step vs hw_top1 "
+        "(censored at N_STEPS for non-appearance):",
+    )
+    print(stat_df.to_string(index=False))
+    mo.ui.table(stat_df, selection=None)
     return
 
 
