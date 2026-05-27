@@ -47,7 +47,8 @@ def do_watermark(mo, watermark):
 
 @app.cell(hide_code=True)
 def delimit_data(mo):
-    mo.md("""
+    mo.md(
+        """
     ## Data
 
     Load the per-replicate Hamming-weight time series produced by the
@@ -62,7 +63,8 @@ def delimit_data(mo):
 
     The OSF slug is downloaded with `requests` and cached at
     `/tmp/<slug>` so re-runs hit the local copy.
-    """)
+    """
+    )
     return
 
 
@@ -102,7 +104,8 @@ def download_data(OSF_SLUG, OSF_URL, pathlib, pd, requests):
 
 @app.cell(hide_code=True)
 def delimit_analysis(mo):
-    mo.md("""
+    mo.md(
+        """
     ## Top-2 Convergence Hamming Weights
 
     For each replicate, locate the run's last simulation step and
@@ -119,7 +122,8 @@ def delimit_analysis(mo):
     Hamming weight shows up as mass on the `hw_top1 == hw_top2`
     diagonal; divergent convergence to two distinct evolutionary
     clusters shows up as off-diagonal mass.
-    """)
+    """
+    )
     return
 
 
@@ -185,7 +189,8 @@ def compute_fractions(top2_df):
 
 @app.cell(hide_code=True)
 def delimit_plot(mo):
-    mo.md("""
+    mo.md(
+        """
     ## Fraction-of-Runs Heatmap
 
     One panel per `N_SITES` condition. Axes are the top-two Hamming
@@ -194,7 +199,8 @@ def delimit_plot(mo):
     replicates (out of 20) whose end state lands in that pair; cells
     with no replicates are masked white. The fraction-as-text overlay
     makes it easy to read off counts directly.
-    """)
+    """
+    )
     return
 
 
@@ -267,7 +273,8 @@ def plot_fraction_heatmap(frac_df, np, pathlib, plt, sns, tp):
 
 @app.cell(hide_code=True)
 def delimit_diff(mo):
-    mo.md("""
+    mo.md(
+        """
     ## Stacked Histogram by Top-2 Hamming-Weight Difference
 
     Per-replicate **Hamming-weight gap** between the top-two end-state
@@ -278,7 +285,8 @@ def delimit_diff(mo):
     one; larger gaps mean the top-two cluster pair spans further
     apart. We plot the **percent of replicates** (out of 20) at each
     `hw_diff` value, stacked, per `N_SITES` condition.
-    """)
+    """
+    )
     return
 
 
@@ -350,14 +358,16 @@ def plot_diff_stacked_hist(np, pathlib, plt, sns, top2_df, tp):
 
 @app.cell(hide_code=True)
 def delimit_tables(mo):
-    mo.md("""
+    mo.md(
+        """
     ## Per-N_SITES Outcome Tables
 
     One table per `N_SITES` condition listing every observed
     end-state `(hw_top1, hw_top2)` pair with the percent of
     replicates that converged there and the Hamming-weight gap
     `hw_diff`. Rows are sorted by decreasing percent.
-    """)
+    """
+    )
     return
 
 
