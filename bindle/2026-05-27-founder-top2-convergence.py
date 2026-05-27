@@ -569,7 +569,7 @@ def delimit_appearance(mo):
 
 
 @app.cell
-def compute_first_appearance(hw_df, top2_df):
+def compute_first_appearance(hw_df, np, top2_df):
     # Earliest step at which the all-ones strain (hw == n_sites) has
     # any circulating cases, per replicate.
     _max_hw_mask = (hw_df["hw"] == hw_df["n_sites"]) & (hw_df["n_cases"] > 0)
@@ -598,6 +598,12 @@ def compute_first_appearance(hw_df, top2_df):
         .fillna(appearance_df["n_steps"])
         .astype(int)
     )
+    # Outcome metric: hamming offset of the end-state dominant strain
+    # to the nearest extreme (0 = founder, N_SITES = all-ones).
+    appearance_df["hamming_offset"] = np.minimum(
+        appearance_df["hw_top1"],
+        appearance_df["n_sites"] - appearance_df["hw_top1"],
+    )
 
     print(
         "censored (never appeared) replicates: "
@@ -615,22 +621,23 @@ def plot_appearance_vs_outcome(appearance_df, pathlib, sns, tp):
         sns.lmplot,
         data=appearance_df,
         x="first_max_hw_step",
-        y="hw_top1",
+        y="hamming_offset",
         col="n_sites",
         col_wrap=2,
         height=3.0,
         aspect=1.2,
         x_jitter=20.0,
-        y_jitter=0.15,
+        y_jitter=0.1,
         scatter_kws={"alpha": 0.65, "s": 36},
         line_kws={"color": "black"},
-        teeplot_outattrs={"a": "first-max-hw-vs-hw-top1"},
+        facet_kws={"sharex": False, "sharey": False},
+        teeplot_outattrs={"a": "first-max-hw-vs-hamming-offset"},
         teeplot_show=True,
         teeplot_subdir=pathlib.Path(__file__).stem,
     ) as _g:
         _g.set_axis_labels(
             "first step max-hw strain appears\n(censored at N_STEPS)",
-            "hw_top1 (end-state)",
+            "hamming_offset = min(hw_top1, N_SITES - hw_top1)",
         )
         _g.set_titles("N_SITES = {col_name}")
         for _ax in _g.axes.flat:
@@ -644,7 +651,7 @@ def first_appearance_stats(appearance_df, mo, pd, sps):
     for _ns in sorted(appearance_df["n_sites"].unique().tolist()):
         _sub = appearance_df[appearance_df["n_sites"] == _ns]
         _x = _sub["first_max_hw_step"].to_numpy()
-        _y = _sub["hw_top1"].to_numpy()
+        _y = _sub["hamming_offset"].to_numpy()
         _rho, _pval = sps.spearmanr(_x, _y)
         _rows.append(
             {
@@ -657,7 +664,7 @@ def first_appearance_stats(appearance_df, mo, pd, sps):
         )
     _rho_all, _pval_all = sps.spearmanr(
         appearance_df["first_max_hw_step"],
-        appearance_df["hw_top1"],
+        appearance_df["hamming_offset"],
     )
     _rows.append(
         {
@@ -670,7 +677,7 @@ def first_appearance_stats(appearance_df, mo, pd, sps):
     )
     stat_df = pd.DataFrame(_rows)
     print(
-        "Spearman rank correlation: first_max_hw_step vs hw_top1 "
+        "Spearman rank correlation: first_max_hw_step vs hamming_offset "
         "(censored at N_STEPS for non-appearance):",
     )
     print(stat_df.to_string(index=False))
