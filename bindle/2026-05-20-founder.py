@@ -133,7 +133,8 @@ def configure_backend(ENGINE, cp, np):
 
 @app.cell(hide_code=True)
 def delimit_simulation(mo):
-    mo.md("""
+    mo.md(
+        """
     ## Simulation Implementation
 
     This is a **founder** notebook: it runs a *single replicate* of the
@@ -239,7 +240,8 @@ def delimit_simulation(mo):
 
     The vectorized deposit pattern is adapted from
     https://github.com/mmore500/hstrat-synthesis (see `pylib/track_ca.py`).
-    """)
+    """
+    )
     return
 
 
@@ -845,7 +847,8 @@ def def_simulate(
 
 @app.cell(hide_code=True)
 def delimit_reconstruct(mo):
-    mo.md("""
+    mo.md(
+        """
     ## Surface-Annotation Reconstruction
 
     Given the snapshot records emitted by `simulate(..., track_phylogeny=
@@ -853,7 +856,8 @@ def delimit_reconstruct(mo):
     `hstrat.dataframe.surface_postprocess_trie` to estimate the phylogenetic
     tree. We use `AssignOriginTimeNodeRankTriePostprocessor(t0="dstream_S")`
     so that origin times line up with simulation step numbers.
-    """)
+    """
+    )
     return
 
 
@@ -886,12 +890,14 @@ def def_reconstruct_phylogeny(gc, hstrat, pd, pl):
 
 @app.cell(hide_code=True)
 def delimit_phylogeny(mo):
-    mo.md("""
+    mo.md(
+        """
     ## Surface-Reconstructed Phylogeny
 
     Sweep `N_SITES` over a few values and render the surface-reconstructed
     phylogeny next to the absolute-prevalence and Hamming-weight stackplots.
-    """)
+    """
+    )
     return
 
 
@@ -1876,7 +1882,8 @@ def def_make_hamming_weight_plot(pathlib, plt, sns, tp):
 
 @app.cell(hide_code=True)
 def delimit_run(mo):
-    mo.md("""
+    mo.md(
+        """
     ## Founder Replicate Run
 
     Run a single replicate for the command-line `seed` / `N_SITES`
@@ -1884,7 +1891,8 @@ def delimit_run(mo):
     onto every output dataframe, write the dataframes to parquet, and
     render the Hamming-weight case-count stackplot together with the
     inherited strain/allele/R/phylogeny figures.
-    """)
+    """
+    )
     return
 
 
