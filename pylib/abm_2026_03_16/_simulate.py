@@ -31,13 +31,8 @@ def simulate(
     MUTATION_THRESHOLD: float = 0.0,
     IMMUNITY_CEILING: float = 1.0,
     IMMUNITY_FLOOR: float = 0.0,
-    TRANSMISSIBILITY: Union[float, Sequence[float]] = 1.0,
     xp=None,
 ) -> pd.DataFrame:
-    # NOTE: ``simulate`` is ``lru_cache``-d, so a per-strain
-    # ``TRANSMISSIBILITY`` vector must be passed as a hashable tuple of length
-    # ``2 ** N_SITES`` (indexed by genome integer). A scalar applies to all
-    # strains; the default of 1.0 leaves transmission unchanged.
     if xp is None:
         xp = _xp
 
@@ -77,7 +72,6 @@ def simulate(
             MUTATION_THRESHOLD,
             IMMUNITY_CEILING,
             IMMUNITY_FLOOR,
-            TRANSMISSIBILITY,
             xp=xp,
         )
 
