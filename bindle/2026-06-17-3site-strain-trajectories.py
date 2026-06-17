@@ -404,5 +404,90 @@ def plot_200(N_SITES, hw_df, make_trellis, strain_hw_df):
     return
 
 
+@app.cell(hide_code=True)
+def delimit_complement(mo):
+    mo.md(
+        """
+    ## End-State Dominant-Strain Complement Absence
+
+    For each replicate, take its **final time point** and identify the
+    **dominant strain** (the genome with the most cases). Its **bitwise
+    complement** is the genome with every allele flipped (`strain ^
+    (2**N_SITES - 1)`) --- e.g. the complement of the founder `000` is
+    `111`, and the complement of `010` is `101`. The complement always
+    shares the dominant strain's "opposite" Hamming weight `N_SITES - hw`.
+
+    We then plot, **per `mutation_rate`**, the **fraction of replicates
+    in which the complement is _absent_** (zero cases) at the final step.
+    A high fraction means end states tend to be one-sided (the dominant
+    strain's mirror image has died out / never established); a low
+    fraction means the complementary genome typically coexists. All 17
+    swept rates are shown on a log x-axis.
+    """
+    )
+    return
+
+
+@app.cell
+def compute_complement(N_SITES, pd, strain_df):
+    _mask = (1 << N_SITES) - 1
+
+    # Final time point per replicate.
+    _last_steps = strain_df.groupby("replicate_uid")["Step"].transform("max")
+    _last = strain_df[strain_df["Step"] == _last_steps]
+
+    _rows = []
+    for _rid, _sub in _last.groupby("replicate_uid"):
+        _dom = int(_sub.loc[_sub["n_cases"].idxmax(), "strain"])
+        _comp = _dom ^ _mask
+        _comp_cases = int(
+            _sub.loc[_sub["strain"] == _comp, "n_cases"].iloc[0],
+        )
+        _rows.append(
+            {
+                "replicate_uid": _rid,
+                "mutation_rate": float(_sub["mutation_rate"].iloc[0]),
+                "dominant_strain": _dom,
+                "complement_strain": _comp,
+                "complement_cases": _comp_cases,
+                "complement_absent": _comp_cases == 0,
+            },
+        )
+    complement_df = pd.DataFrame(_rows)
+
+    complement_frac_df = (
+        complement_df.groupby("mutation_rate")["complement_absent"]
+        .agg(frac_absent="mean", n_absent="sum", n_total="count")
+        .reset_index()
+        .sort_values("mutation_rate")
+    )
+    print(complement_frac_df.to_string(index=False))
+    return (complement_frac_df,)
+
+
+@app.cell
+def plot_complement(complement_frac_df, pathlib, plt, sns, tp):
+    with tp.teed(
+        sns.lineplot,
+        data=complement_frac_df,
+        x="mutation_rate",
+        y="frac_absent",
+        marker="o",
+        color="#6a3d9a",
+        teeplot_outattrs={"a": "dominant-complement-absent-fraction"},
+        teeplot_show=True,
+        teeplot_subdir=pathlib.Path(__file__).stem,
+    ) as _ax:
+        _ax.set_xscale("log")
+        _ax.set_ylim(-0.02, 1.02)
+        _ax.set_xlabel("mutation rate (log scale)")
+        _ax.set_ylabel(
+            "fraction of replicates\ncomplement absent at end",
+        )
+        sns.despine(ax=_ax)
+        _ax.figure.set_size_inches(6, 3.5)
+    return
+
+
 if __name__ == "__main__":
     app.run()
