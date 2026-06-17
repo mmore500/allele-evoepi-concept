@@ -52,39 +52,35 @@ def delimit_data(mo):
         """
     ## Data
 
-    Load the per-replicate **strain** and **Hamming-weight** prevalence
-    time series produced by the 3-site mutation-rate sweep slurm job
-    (`slurm/2026-06-17/2026-06-17-3site-mutation-sweep.sh`, driven by
-    notebook `bindle/2026-05-20-founder.py`), cached as parquets on OSF.
-    The sweep fixes `N_SITES=3` and steps `MUTATION_RATE` across a
-    geometric grid of 17 conditions spanning `1e-9` to `1e-1` (~2 points
-    per decade), with a handful of replicates retained per rate at 5000
-    steps each, POP_SIZE=1_000_000, on CPU (engine=numpy).
+    The **2-site** companion to
+    `bindle/2026-06-17-3site-strain-trajectories.py`. Load the
+    per-replicate **strain** and **Hamming-weight** prevalence time
+    series for the 2-site model (`N_SITES=2`, so genomes are `00, 01, 10,
+    11` --- strain indices `0 .. 3` --- and Hamming weights run `0 .. 2`).
+    The mutation-rate sweep covers 7 conditions spanning `1e-4` to `1e-1`
+    (~2 points per decade), 5000 steps per replicate,
+    POP_SIZE=1_000_000, on CPU (engine=numpy).
 
-    Two long-form frames back this notebook, keyed by the shared
-    `replicate_uid` and `Step`:
+    Four long-form frames back this notebook, keyed by `replicate_uid`
+    and `Step`:
 
-    - **strain** (`f4bzv`): one row per `(replicate_uid, Step, strain)`
-      genome (`strain` in `0 .. 2**N_SITES - 1`), with per-genome
-      prevalence `count` (population fraction) and raw case count
-      `n_cases`. A strain's Hamming weight is its genome bit-count ---
-      the number of mutations separating it from the all-zero founder.
-    - **hw** (`4mrgu`): one row per `(replicate_uid, Step, hw)`
-      Hamming-weight band (`hw` in `0 .. N_SITES`), aggregating the
-      per-genome counts into the per-weight prevalence `count`. Each
-      band equals the sum of its same-weight strains.
-    - **strain-final** (`nmzrj`): the per-genome **end state** only (the
-      final step, `~200` replicates per rate --- many more than the
-      handful retained in the trajectory frames), used for the
-      end-state complement-absence statistics at the bottom.
+    - **strain-samples** (`gycde`): per-genome prevalence **trajectory**
+      (one row per `(replicate_uid, Step, strain)`), a handful of
+      replicates per rate --- backs the trellis solid lines.
+    - **hw-samples** (`96gxr`): per-Hamming-weight band prevalence
+      **trajectory** (one row per `(replicate_uid, Step, hw)`) --- backs
+      the trellis dashed lines.
+    - **strain-final** (`ybgwp`): per-genome **end state** only (final
+      step, ~200 replicates per rate) --- backs the end-state
+      complement-absence statistics.
+    - **hw-final** (`x7qmt`): per-Hamming-weight band **end state** ---
+      loaded for reference (the complement statistic needs the
+      per-genome `strain-final` frame, so `hw-final` is not plotted
+      here).
 
     This is a **visualization notebook** (no CLI arguments): the OSF
     slugs are hard-coded below and downloaded with `requests`, cached at
-    `/tmp/<slug>` so re-runs hit the local copy. It renders the replicate
-    trajectory trellis at **four zoom windows** from a single helper ---
-    the **full** run (all 5000 updates, all power-of-ten rates) plus
-    establishment-phase zooms to the first **2000**, **400**, and **200**
-    updates (which drop the slowest `1e-9` rate).
+    `/tmp/<slug>` so re-runs hit the local copy.
     """
     )
     return
@@ -112,13 +108,13 @@ def def_fetch(pathlib, pd, requests):
 
 @app.cell
 def download_data(fetch_osf):
-    # strain (f4bzv) = per-genome prevalence trajectory; hw (4mrgu) =
-    # per-Hamming-weight band prevalence trajectory. These back the
-    # replicate trajectory trellis.
-    strain_df = fetch_osf("f4bzv")
-    hw_df = fetch_osf("4mrgu")
-    print(f"loaded strain dataframe: {strain_df.shape}")
-    print(f"loaded hw dataframe: {hw_df.shape}")
+    # strain-samples (gycde) = per-genome prevalence trajectory;
+    # hw-samples (96gxr) = per-Hamming-weight band prevalence trajectory.
+    # These back the replicate trajectory trellis.
+    strain_df = fetch_osf("gycde")
+    hw_df = fetch_osf("96gxr")
+    print(f"loaded strain-samples dataframe: {strain_df.shape}")
+    print(f"loaded hw-samples dataframe: {hw_df.shape}")
     print(
         "mutation_rate x replicate counts (hw):\n"
         + str(hw_df.groupby("mutation_rate")["replicate_uid"].nunique()),
@@ -128,10 +124,10 @@ def download_data(fetch_osf):
 
 @app.cell
 def download_strain_final(fetch_osf):
-    # strain-final (nmzrj) = per-genome END-STATE (final step only) with
+    # strain-final (ybgwp) = per-genome END-STATE (final step only) with
     # ~200 replicates per mutation rate --- backs the end-state
     # complement-absence statistics.
-    strain_final_df = fetch_osf("nmzrj")
+    strain_final_df = fetch_osf("ybgwp")
     print(f"loaded strain-final dataframe: {strain_final_df.shape}")
     print(
         "mutation_rate x replicate counts (strain-final):\n"
@@ -155,12 +151,11 @@ def delimit_prep(mo):
     aggregated `hw` bands. Then define a reusable `make_trellis` helper
     that, for an optional **step window** (`step_clip`), clips both frames
     to the first `step_clip` updates and renders the replicate trellis:
-    **one column per `mutation_rate`** (power-of-ten rates only, increasing
-    **left to right**) and **one row per within-rate replicate** (ordered
-    by `replicate_uid`). The zoomed windows pass `drop_slowest=True` to
-    drop the `1e-9` rate, whose establishment phase is uninformative.
-    Per-step series are subsampled by a window-dependent `STRIDE` so each
-    line carries at most ~1000 points.
+    **one column per `mutation_rate`** (power-of-ten rates only, so
+    `1e-4 .. 1e-1`, increasing **left to right**) and **one row per
+    within-rate replicate** (ordered by `replicate_uid`). Per-step series
+    are subsampled by a window-dependent `STRIDE` so each line carries at
+    most ~1000 points.
     """
     )
     return
@@ -178,17 +173,11 @@ def tag_hw(hw_df, strain_df):
 
 @app.cell
 def def_make_trellis(mlines, pathlib, plt, sns, tp):
-    # Categorical Hamming-weight palette: extreme weights 0 & 3 (founder
-    # 000 and complement 111) cool, intermediate weights 1 & 2 warm.
-    _HW_COLORS = ["#2b6cb0", "#ed8936", "#c53030", "#38b2ac"]
+    # Categorical Hamming-weight palette (2-site): extreme weights 0 & 2
+    # (founder 00 and complement 11) cool, intermediate weight 1 warm.
+    _HW_COLORS = ["#2b6cb0", "#c53030", "#38b2ac"]
 
-    def make_trellis(
-        hw_df,
-        strain_hw_df,
-        N_SITES,
-        step_clip=None,
-        drop_slowest=False,
-    ):
+    def make_trellis(hw_df, strain_hw_df, N_SITES, step_clip=None):
         # Clip both frames to the first ``step_clip`` updates (or keep the
         # full run when ``step_clip`` is None).
         if step_clip is None:
@@ -203,12 +192,11 @@ def def_make_trellis(mlines, pathlib, plt, sns, tp):
             )
         stride = max(1, int(_strain["Step"].nunique()) // 1000)
 
-        # Power-of-ten mutation rates (ascending); optionally drop 1e-9.
+        # Power-of-ten mutation rates (ascending).
         rate_vals = [
             _r
             for _r in sorted(_hw["mutation_rate"].unique().tolist())
             if f"{_r:.0e}".startswith("1e")
-            and not (drop_slowest and f"{_r:.0e}" == "1e-09")
         ]
         reps_by_rate = {
             _rate: sorted(
@@ -338,7 +326,7 @@ def delimit_plot_full(mo):
     ## Trellis --- Full Run (All Updates)
 
     One panel per replicate, trellised by `mutation_rate` (columns,
-    increasing left to right, all power-of-ten rates `1e-9 .. 1e-1`) over
+    increasing left to right, power-of-ten rates `1e-4 .. 1e-1`) over
     within-rate replicates (rows). In each panel:
 
     - **solid** lines are individual **strain** (per-genome) prevalence
@@ -347,12 +335,12 @@ def delimit_plot_full(mo):
       prevalences in the same color scheme.
 
     Hamming weights use a categorical palette in which the **extreme
-    weights `0` and `3`** (the founder `000` and its complement `111`)
-    are **cool** (blue / cyan) and the **intermediate weights `1` and
-    `2`** are **warm** (orange / red). These are individual replicate
-    trajectories, so **no confidence interval** is drawn --- every line
-    is one realized run. The dashed band of a given color is the sum of
-    the solid strain curves sharing that Hamming weight.
+    weights `0` and `2`** (the founder `00` and its complement `11`) are
+    **cool** (blue / cyan) and the **intermediate weight `1`** is **warm**
+    (red). These are individual replicate trajectories, so **no
+    confidence interval** is drawn --- every line is one realized run.
+    The dashed band of a given color is the sum of the solid strain
+    curves sharing that Hamming weight.
     """
     )
     return
@@ -370,9 +358,8 @@ def delimit_plot_2000(mo):
         """
     ## Trellis --- First 2000 Updates
 
-    The same trellis clipped to the first **2000** updates (and dropping
-    the slowest `1e-9` rate) to zoom in on the establishment phase and
-    the start of the endemic plateau.
+    The same trellis clipped to the first **2000** updates to zoom in on
+    the establishment phase and the start of the endemic plateau.
     """
     )
     return
@@ -380,9 +367,7 @@ def delimit_plot_2000(mo):
 
 @app.cell
 def plot_2000(N_SITES, hw_df, make_trellis, strain_hw_df):
-    make_trellis(
-        hw_df, strain_hw_df, N_SITES, step_clip=2000, drop_slowest=True
-    )
+    make_trellis(hw_df, strain_hw_df, N_SITES, step_clip=2000)
     return
 
 
@@ -402,9 +387,7 @@ def delimit_plot_400(mo):
 
 @app.cell
 def plot_400(N_SITES, hw_df, make_trellis, strain_hw_df):
-    make_trellis(
-        hw_df, strain_hw_df, N_SITES, step_clip=400, drop_slowest=True
-    )
+    make_trellis(hw_df, strain_hw_df, N_SITES, step_clip=400)
     return
 
 
@@ -424,9 +407,7 @@ def delimit_plot_200(mo):
 
 @app.cell
 def plot_200(N_SITES, hw_df, make_trellis, strain_hw_df):
-    make_trellis(
-        hw_df, strain_hw_df, N_SITES, step_clip=200, drop_slowest=True
-    )
+    make_trellis(hw_df, strain_hw_df, N_SITES, step_clip=200)
     return
 
 
@@ -437,19 +418,18 @@ def delimit_complement(mo):
     ## End-State Dominant-Strain Complement Absence
 
     Using the higher-replicate **`strain-final`** end-state snapshot
-    (`~200` replicates per rate), for each replicate identify the
+    (~200 replicates per rate), for each replicate identify the
     **dominant strain** (the genome with the most cases). Its **bitwise
     complement** is the genome with every allele flipped (`strain ^
-    (2**N_SITES - 1)`) --- e.g. the complement of the founder `000` is
-    `111`, and the complement of `010` is `101`. The complement always
+    (2**N_SITES - 1)`) --- e.g. the complement of the founder `00` is
+    `11`, and the complement of `01` is `10`. The complement always
     shares the dominant strain's "opposite" Hamming weight `N_SITES - hw`.
 
     We then plot, **per `mutation_rate`**, the **fraction of replicates
     in which the complement is _absent_** (zero cases) at the final step.
-    A high fraction means end states tend to be one-sided (the dominant
-    strain's mirror image has died out / never established); a low
-    fraction means the complementary genome typically coexists. All 17
-    swept rates are shown on a log x-axis.
+    A high fraction means end states tend to be one-sided; a low fraction
+    means the complementary genome typically coexists. All 7 swept rates
+    are shown on a log x-axis.
     """
     )
     return
@@ -475,11 +455,11 @@ def compute_complement(N_SITES, pd, strain_final_df):
                 "dominant_strain": _dom,
                 "dominant_hw": _dom_hw,
                 # Founder class == extreme Hamming weights {0, N_SITES};
-                # intermediate == {1, 2}.
+                # intermediate == {1}.
                 "dominant_class": (
-                    "founder (HW 0/3)"
+                    "founder (HW 0/2)"
                     if _dom_hw in (0, N_SITES)
-                    else "intermediate (HW 1/2)"
+                    else "intermediate (HW 1)"
                 ),
                 "complement_strain": _comp,
                 "complement_cases": _comp_cases,
@@ -531,11 +511,11 @@ def delimit_complement_split(mo):
 
     The same end-state statistic, but with replicates **split by the
     Hamming-weight class of the final dominant strain**: **founder**
-    (extreme weights `0`/`3` --- the founder `000` and its complement
-    `111`) versus **intermediate** (weights `1`/`2`). Each line is the
-    fraction of replicates *within that class* whose dominant-strain
-    complement is absent at the final step, per mutation rate. (Where a
-    class has no replicates at a given rate it simply has no point.)
+    (extreme weights `0`/`2` --- the founder `00` and its complement
+    `11`) versus **intermediate** (weight `1`). Each line is the fraction
+    of replicates *within that class* whose dominant-strain complement is
+    absent at the final step, per mutation rate. (Where a class has no
+    replicates at a given rate it simply has no point.)
     """
     )
     return
@@ -543,10 +523,10 @@ def delimit_complement_split(mo):
 
 @app.cell
 def plot_complement_split(complement_df, pathlib, sns, tp):
-    _class_order = ["founder (HW 0/3)", "intermediate (HW 1/2)"]
+    _class_order = ["founder (HW 0/2)", "intermediate (HW 1)"]
     _palette = {
-        "founder (HW 0/3)": "#2b6cb0",
-        "intermediate (HW 1/2)": "#c53030",
+        "founder (HW 0/2)": "#2b6cb0",
+        "intermediate (HW 1)": "#c53030",
     }
     _frac_df = (
         complement_df.groupby(["mutation_rate", "dominant_class"])[
