@@ -108,6 +108,7 @@ def configure_args(mo):
     POP_SIZE = int(_args.get("pop-size") or 100_000)
     N_STEPS = int(_args.get("n-steps") or 1_200)
     POW = float(_args.get("pow") or 1.0)
+    MUTATION_RATE = float(_args.get("mutation-rate") or 1e-5)
     ENGINE = str(_args.get("engine") or "numpy").lower()
     if ENGINE not in ("numpy", "cupy"):
         raise ValueError(
@@ -116,10 +117,19 @@ def configure_args(mo):
     SKIP_PLOTTING = bool(_args.get("skip-plotting") or False)
     print(
         f"args: SEED={SEED} N_SITES={N_SITES} POP_SIZE={POP_SIZE} "
-        f"N_STEPS={N_STEPS} POW={POW} ENGINE={ENGINE} "
-        f"SKIP_PLOTTING={SKIP_PLOTTING}",
+        f"N_STEPS={N_STEPS} POW={POW} MUTATION_RATE={MUTATION_RATE} "
+        f"ENGINE={ENGINE} SKIP_PLOTTING={SKIP_PLOTTING}",
     )
-    return ENGINE, N_SITES, N_STEPS, POP_SIZE, POW, SEED, SKIP_PLOTTING
+    return (
+        ENGINE,
+        MUTATION_RATE,
+        N_SITES,
+        N_STEPS,
+        POP_SIZE,
+        POW,
+        SEED,
+        SKIP_PLOTTING,
+    )
 
 
 @app.cell
@@ -157,6 +167,8 @@ def delimit_simulation(mo):
     * `--engine` --- compute backend, `numpy` (CPU) or `cupy` (GPU)
       (default `numpy`).
     * `--pow` --- susceptibility-product exponent (default `1.0`).
+    * `--mutation-rate` --- per-genome per-step mutation rate, spread
+      across the `N_SITES` bits (default `1e-5`).
     * `--skip-plotting` --- skip figure rendering (default `False`).
 
     Each genome bit is an allele; a circulating strain's **Hamming
@@ -1899,6 +1911,7 @@ def delimit_run(mo):
 @app.cell
 def run_founder(
     ENGINE,
+    MUTATION_RATE,
     N_SITES,
     N_STEPS,
     POP_SIZE,
@@ -1920,8 +1933,9 @@ def run_founder(
 ):
     # Fixed epidemiological parameters (not exposed on the command
     # line); these mirror the settings used by the parent sweep
-    # notebook 2026-05-06-allele-abm-r-per-strain.py.
-    MUTATION_RATE = 1e-5
+    # notebook 2026-05-06-allele-abm-r-per-strain.py. MUTATION_RATE is
+    # the exception --- it is supplied via --mutation-rate (default
+    # 1e-5) so it can be swept on the command line.
     CONTACT_RATE = 0.35
     RECOVERY_RATE = 0.1
     WANING_RATE = 0.01
