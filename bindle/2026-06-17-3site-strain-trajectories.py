@@ -73,6 +73,10 @@ def delimit_data(mo):
       Hamming-weight band (`hw` in `0 .. N_SITES`), aggregating the
       per-genome counts into the per-weight prevalence `count`. Each
       band equals the sum of its same-weight strains.
+    - **strain-final** (`nmzrj`): the per-genome **end state** only (the
+      final step, `~200` replicates per rate --- many more than the
+      handful retained in the trajectory frames), used for the
+      end-state complement-absence statistics at the bottom.
 
     This is a **visualization notebook** (no CLI arguments): the OSF
     slugs are hard-coded below and downloaded with `requests`, cached at
@@ -87,14 +91,10 @@ def delimit_data(mo):
 
 
 @app.cell
-def download_data(pathlib, pd, requests):
-    # Hard-coded source slugs (this is a visualization notebook with no
-    # CLI arguments). strain = per-genome prevalence, hw = per-Hamming-
-    # weight band prevalence, both from the 3-site mutation sweep.
-    OSF_SLUG_STRAIN = "f4bzv"
-    OSF_SLUG_HW = "4mrgu"
-
-    def _fetch(slug):
+def def_fetch(pathlib, pd, requests):
+    # Shared OSF fetcher with /tmp caching (this is a visualization
+    # notebook with no CLI arguments --- all slugs are hard-coded).
+    def fetch_osf(slug):
         cache_path = pathlib.Path("/tmp") / slug
         url = f"https://osf.io/{slug}/download"
         if not cache_path.exists():
@@ -107,8 +107,16 @@ def download_data(pathlib, pd, requests):
         print(f"size: {cache_path.stat().st_size} bytes")
         return pd.read_parquet(cache_path)
 
-    strain_df = _fetch(OSF_SLUG_STRAIN)
-    hw_df = _fetch(OSF_SLUG_HW)
+    return (fetch_osf,)
+
+
+@app.cell
+def download_data(fetch_osf):
+    # strain (f4bzv) = per-genome prevalence trajectory; hw (4mrgu) =
+    # per-Hamming-weight band prevalence trajectory. These back the
+    # replicate trajectory trellis.
+    strain_df = fetch_osf("f4bzv")
+    hw_df = fetch_osf("4mrgu")
     print(f"loaded strain dataframe: {strain_df.shape}")
     print(f"loaded hw dataframe: {hw_df.shape}")
     print(
@@ -116,6 +124,24 @@ def download_data(pathlib, pd, requests):
         + str(hw_df.groupby("mutation_rate")["replicate_uid"].nunique()),
     )
     return hw_df, strain_df
+
+
+@app.cell
+def download_strain_final(fetch_osf):
+    # strain-final (nmzrj) = per-genome END-STATE (final step only) with
+    # ~200 replicates per mutation rate --- backs the end-state
+    # complement-absence statistics.
+    strain_final_df = fetch_osf("nmzrj")
+    print(f"loaded strain-final dataframe: {strain_final_df.shape}")
+    print(
+        "mutation_rate x replicate counts (strain-final):\n"
+        + str(
+            strain_final_df.groupby("mutation_rate")[
+                "replicate_uid"
+            ].nunique(),
+        ),
+    )
+    return (strain_final_df,)
 
 
 @app.cell(hide_code=True)
@@ -410,7 +436,8 @@ def delimit_complement(mo):
         """
     ## End-State Dominant-Strain Complement Absence
 
-    For each replicate, take its **final time point** and identify the
+    Using the higher-replicate **`strain-final`** end-state snapshot
+    (`~200` replicates per rate), for each replicate identify the
     **dominant strain** (the genome with the most cases). Its **bitwise
     complement** is the genome with every allele flipped (`strain ^
     (2**N_SITES - 1)`) --- e.g. the complement of the founder `000` is
@@ -429,16 +456,14 @@ def delimit_complement(mo):
 
 
 @app.cell
-def compute_complement(N_SITES, pd, strain_df):
+def compute_complement(N_SITES, pd, strain_final_df):
     _mask = (1 << N_SITES) - 1
 
-    # Final time point per replicate.
-    _last_steps = strain_df.groupby("replicate_uid")["Step"].transform("max")
-    _last = strain_df[strain_df["Step"] == _last_steps]
-
+    # strain-final already holds one final-step snapshot per replicate.
     _rows = []
-    for _rid, _sub in _last.groupby("replicate_uid"):
+    for _rid, _sub in strain_final_df.groupby("replicate_uid"):
         _dom = int(_sub.loc[_sub["n_cases"].idxmax(), "strain"])
+        _dom_hw = bin(_dom).count("1")
         _comp = _dom ^ _mask
         _comp_cases = int(
             _sub.loc[_sub["strain"] == _comp, "n_cases"].iloc[0],
@@ -448,28 +473,37 @@ def compute_complement(N_SITES, pd, strain_df):
                 "replicate_uid": _rid,
                 "mutation_rate": float(_sub["mutation_rate"].iloc[0]),
                 "dominant_strain": _dom,
+                "dominant_hw": _dom_hw,
+                # Founder class == extreme Hamming weights {0, N_SITES};
+                # intermediate == {1, 2}.
+                "dominant_class": (
+                    "founder (HW 0/3)"
+                    if _dom_hw in (0, N_SITES)
+                    else "intermediate (HW 1/2)"
+                ),
                 "complement_strain": _comp,
                 "complement_cases": _comp_cases,
                 "complement_absent": _comp_cases == 0,
             },
         )
     complement_df = pd.DataFrame(_rows)
+    print(f"complement frame: {complement_df.shape}")
+    return (complement_df,)
 
-    complement_frac_df = (
+
+@app.cell
+def plot_complement(complement_df, pathlib, sns, tp):
+    _frac_df = (
         complement_df.groupby("mutation_rate")["complement_absent"]
         .agg(frac_absent="mean", n_absent="sum", n_total="count")
         .reset_index()
         .sort_values("mutation_rate")
     )
-    print(complement_frac_df.to_string(index=False))
-    return (complement_frac_df,)
+    print(_frac_df.to_string(index=False))
 
-
-@app.cell
-def plot_complement(complement_frac_df, pathlib, plt, sns, tp):
     with tp.teed(
         sns.lineplot,
-        data=complement_frac_df,
+        data=_frac_df,
         x="mutation_rate",
         y="frac_absent",
         marker="o",
@@ -484,6 +518,68 @@ def plot_complement(complement_frac_df, pathlib, plt, sns, tp):
         _ax.set_ylabel(
             "fraction of replicates\ncomplement absent at end",
         )
+        sns.despine(ax=_ax)
+        _ax.figure.set_size_inches(6, 3.5)
+    return
+
+
+@app.cell(hide_code=True)
+def delimit_complement_split(mo):
+    mo.md(
+        """
+    ## Complement Absence Split by Dominant Hamming-Weight Class
+
+    The same end-state statistic, but with replicates **split by the
+    Hamming-weight class of the final dominant strain**: **founder**
+    (extreme weights `0`/`3` --- the founder `000` and its complement
+    `111`) versus **intermediate** (weights `1`/`2`). Each line is the
+    fraction of replicates *within that class* whose dominant-strain
+    complement is absent at the final step, per mutation rate. (Where a
+    class has no replicates at a given rate it simply has no point.)
+    """
+    )
+    return
+
+
+@app.cell
+def plot_complement_split(complement_df, pathlib, sns, tp):
+    _class_order = ["founder (HW 0/3)", "intermediate (HW 1/2)"]
+    _palette = {
+        "founder (HW 0/3)": "#2b6cb0",
+        "intermediate (HW 1/2)": "#c53030",
+    }
+    _frac_df = (
+        complement_df.groupby(["mutation_rate", "dominant_class"])[
+            "complement_absent"
+        ]
+        .agg(frac_absent="mean", n_absent="sum", n_total="count")
+        .reset_index()
+        .sort_values(["dominant_class", "mutation_rate"])
+    )
+    print(_frac_df.to_string(index=False))
+
+    with tp.teed(
+        sns.lineplot,
+        data=_frac_df,
+        x="mutation_rate",
+        y="frac_absent",
+        hue="dominant_class",
+        hue_order=_class_order,
+        palette=_palette,
+        marker="o",
+        teeplot_outattrs={
+            "a": "dominant-complement-absent-fraction-by-class",
+        },
+        teeplot_show=True,
+        teeplot_subdir=pathlib.Path(__file__).stem,
+    ) as _ax:
+        _ax.set_xscale("log")
+        _ax.set_ylim(-0.02, 1.02)
+        _ax.set_xlabel("mutation rate (log scale)")
+        _ax.set_ylabel(
+            "fraction of replicates\ncomplement absent at end",
+        )
+        _ax.legend(title="final dominant class", frameon=False, fontsize=8)
         sns.despine(ax=_ax)
         _ax.figure.set_size_inches(6, 3.5)
     return
