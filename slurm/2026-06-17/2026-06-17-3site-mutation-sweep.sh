@@ -53,7 +53,7 @@ N_TASKS=$((N_CONDITIONS * N_REPLICATES))
 CHUNK=4
 N_ARRAY_TASKS=$(((N_TASKS + CHUNK - 1) / CHUNK))
 N_STEPS=5000
-POP_SIZE=100000
+POP_SIZE=1000000
 echo "N_SITES=${N_SITES} MUTATION_RATES=${MUTATION_RATES[*]}"
 echo "N_REPLICATES=${N_REPLICATES} N_CONDITIONS=${N_CONDITIONS}"
 echo "N_TASKS=${N_TASKS} CHUNK=${CHUNK} N_ARRAY_TASKS=${N_ARRAY_TASKS}"
@@ -233,7 +233,7 @@ cat > "${SBATCH_FILE}" << EOF
 #!/bin/bash
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=${CHUNK}
-#SBATCH --mem=32G
+#SBATCH --mem=64G
 #SBATCH --time=4:00:00
 #SBATCH --output="/mnt/home/%u/joblog/%j"
 #SBATCH --mail-user=mawni4ah2o@pomail.net
