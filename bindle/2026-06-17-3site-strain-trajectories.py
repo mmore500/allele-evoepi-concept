@@ -125,11 +125,13 @@ def delimit_prep(mo):
 
     Tag every strain genome with its **Hamming weight** (`bit-count`) so
     the per-genome curves can be colored by weight, matching the
-    aggregated `hw` bands. Then build the trellis index: replicates are
-    arranged with **one row per `mutation_rate`** (ascending) and **one
-    column per within-rate replicate** (ordered by `replicate_uid`), so
-    each panel is a single replicate's full trajectory and reading down a
-    column walks the mutation-rate sweep.
+    aggregated `hw` bands. Then build the trellis index: only the
+    **power-of-ten mutation rates** (`1e-9 .. 1e-1`) are kept (the
+    intermediate `3e-X` conditions are dropped), arranged with **one
+    column per `mutation_rate`** increasing **left to right** and **one
+    row per within-rate replicate** (ordered by `replicate_uid`), so each
+    panel is a single replicate's full trajectory and reading across a
+    row walks the mutation-rate sweep.
 
     The per-step series are subsampled by `STRIDE` for plotting (the
     endemic curves are smooth, so thinning to ~1000 points per line keeps
@@ -148,9 +150,15 @@ def prep_layout(hw_df, strain_df):
         hw=strain_df["strain"].map(lambda _s: bin(int(_s)).count("1")),
     )
 
-    # Row = mutation_rate (ascending); column = within-rate replicate
-    # rank (ordered by replicate_uid for determinism).
-    rate_vals = sorted(hw_df["mutation_rate"].unique().tolist())
+    # Restrict to the power-of-ten mutation rates (1e-9 .. 1e-1),
+    # dropping the intermediate 3e-X conditions. Trellis columns are
+    # these rates increasing left to right; rows are within-rate
+    # replicates (ordered by replicate_uid for determinism).
+    rate_vals = [
+        _r
+        for _r in sorted(hw_df["mutation_rate"].unique().tolist())
+        if f"{_r:.0e}".startswith("1e")
+    ]
     reps_by_rate = {
         _rate: sorted(
             hw_df[hw_df["mutation_rate"] == _rate]["replicate_uid"].unique(),
@@ -160,7 +168,7 @@ def prep_layout(hw_df, strain_df):
     max_reps = max(len(_r) for _r in reps_by_rate.values())
     print(f"N_SITES={N_SITES} STRIDE={STRIDE}")
     print(
-        f"grid: {len(rate_vals)} rates (rows) x {max_reps} replicates (cols)"
+        f"grid: {max_reps} replicates (rows) x {len(rate_vals)} rates (cols)"
     )
     return N_SITES, STRIDE, max_reps, rate_vals, reps_by_rate, strain_hw_df
 
@@ -170,13 +178,20 @@ def delimit_plot(mo):
     mo.md("""
     ## Replicate Trajectory Trellis
 
-    One panel per replicate, trellised by `mutation_rate` (rows, log-
-    spaced sweep) over within-rate replicates (columns). In each panel:
+    One panel per replicate, trellised by `mutation_rate` (columns,
+    increasing left to right) over within-rate replicates (rows). In each
+    panel:
 
     - **solid** lines are individual **strain** (per-genome) prevalence
       trajectories, **color-coded by Hamming weight**;
     - **dashed** lines are the aggregated **Hamming-weight band**
       prevalences in the same color scheme.
+
+    Hamming weights use a categorical palette in which the **extreme
+    weights `0` and `3`** (the founder `000` and its complement `111`)
+    are **cool** (blue / cyan) and the **intermediate weights `1` and
+    `2`** are **warm** (orange / red), so the founder-aligned and
+    intermediate classes read apart at a glance.
 
     These are individual replicate trajectories, so **no confidence
     interval** is drawn --- every line is one realized run. The dashed
@@ -201,15 +216,17 @@ def plot_trellis(
     strain_hw_df,
     tp,
 ):
-    _hw_colors = sns.color_palette("viridis", N_SITES + 1)
-    _n_rows = len(rate_vals)
-    _n_cols = int(max_reps)
+    # Categorical Hamming-weight palette: extreme weights 0 & 3 (founder
+    # 000 and complement 111) cool, intermediate weights 1 & 2 warm.
+    _hw_colors = ["#2b6cb0", "#ed8936", "#c53030", "#38b2ac"]
+    _n_cols = len(rate_vals)
+    _n_rows = int(max_reps)
 
     with tp.teed(
         plt.subplots,
         nrows=_n_rows,
         ncols=_n_cols,
-        figsize=(2.3 * _n_cols, 1.25 * _n_rows),
+        figsize=(2.3 * _n_cols, 1.4 * _n_rows),
         sharex=True,
         squeeze=False,
         teeplot_outattrs={"a": "strain-vs-hw-replicate-trellis"},
@@ -218,8 +235,8 @@ def plot_trellis(
     ) as (_fig, _axes):
         for _i, _rate in enumerate(rate_vals):
             _reps = reps_by_rate[_rate]
-            for _j in range(_n_cols):
-                _ax = _axes[_i][_j]
+            for _j in range(_n_rows):
+                _ax = _axes[_j][_i]
                 if _j >= len(_reps):
                     _ax.axis("off")
                     continue
@@ -255,14 +272,14 @@ def plot_trellis(
 
                 _ax.set_ylim(bottom=0)
                 _ax.tick_params(labelsize=6)
-                if _j == 0:
+                if _i == 0:
                     _ax.set_ylabel(
-                        f"$\\mu$={_rate:.0e}\nprevalence",
+                        f"replicate {_j}\nprevalence",
                         fontsize=7,
                     )
-                if _i == 0:
-                    _ax.set_title(f"replicate {_j}", fontsize=8)
-                if _i == _n_rows - 1:
+                if _j == 0:
+                    _ax.set_title(f"$\\mu$={_rate:.0e}", fontsize=8)
+                if _j == _n_rows - 1:
                     _ax.set_xlabel("Step", fontsize=7)
                 sns.despine(ax=_ax)
 
