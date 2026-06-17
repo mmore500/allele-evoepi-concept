@@ -73,27 +73,25 @@ def delimit_data(mo):
       per-genome counts into the per-weight prevalence `count`. Each
       band equals the sum of its same-weight strains.
 
-    Both slugs are downloaded with `requests` and cached at `/tmp/<slug>`
-    so re-runs hit the local copy.
+    This is a **visualization notebook** (no CLI arguments): the OSF
+    slugs are hard-coded below and downloaded with `requests`, cached at
+    `/tmp/<slug>` so re-runs hit the local copy. It renders the replicate
+    trajectory trellis at **four zoom windows** from a single helper ---
+    the **full** run (all 5000 updates, all power-of-ten rates) plus
+    establishment-phase zooms to the first **2000**, **400**, and **200**
+    updates (which drop the slowest `1e-9` rate).
     """)
     return
 
 
 @app.cell
-def configure_args(mo):
-    # CLI args. Defaults pull the 3-site mutation-sweep strain + hw
-    # trajectory parquets that back this notebook.
-    _args = mo.cli_args()
-    OSF_SLUG_STRAIN = str(_args.get("osf-slug-strain") or "f4bzv")
-    OSF_SLUG_HW = str(_args.get("osf-slug-hw") or "4mrgu")
-    print(
-        f"args: OSF_SLUG_STRAIN={OSF_SLUG_STRAIN} OSF_SLUG_HW={OSF_SLUG_HW}",
-    )
-    return OSF_SLUG_HW, OSF_SLUG_STRAIN
+def download_data(pathlib, pd, requests):
+    # Hard-coded source slugs (this is a visualization notebook with no
+    # CLI arguments). strain = per-genome prevalence, hw = per-Hamming-
+    # weight band prevalence, both from the 3-site mutation sweep.
+    OSF_SLUG_STRAIN = "f4bzv"
+    OSF_SLUG_HW = "4mrgu"
 
-
-@app.cell
-def download_data(OSF_SLUG_HW, OSF_SLUG_STRAIN, pathlib, pd, requests):
     def _fetch(slug):
         cache_path = pathlib.Path("/tmp") / slug
         url = f"https://osf.io/{slug}/download"
@@ -121,66 +119,196 @@ def download_data(OSF_SLUG_HW, OSF_SLUG_STRAIN, pathlib, pd, requests):
 @app.cell(hide_code=True)
 def delimit_prep(mo):
     mo.md("""
-    ## Trellis Layout & Hamming-Weight Coloring
+    ## Hamming-Weight Coloring & Trellis Builder
 
     Tag every strain genome with its **Hamming weight** (`bit-count`) so
     the per-genome curves can be colored by weight, matching the
-    aggregated `hw` bands. Then build the trellis index: only the
-    **power-of-ten mutation rates** (`1e-9 .. 1e-1`) are kept (the
-    intermediate `3e-X` conditions are dropped), arranged with **one
-    column per `mutation_rate`** increasing **left to right** and **one
-    row per within-rate replicate** (ordered by `replicate_uid`), so each
-    panel is a single replicate's full trajectory and reading across a
-    row walks the mutation-rate sweep.
-
-    The per-step series are subsampled by `STRIDE` for plotting (the
-    endemic curves are smooth, so thinning to ~1000 points per line keeps
-    the figure light without changing its shape).
+    aggregated `hw` bands. Then define a reusable `make_trellis` helper
+    that, for an optional **step window** (`step_clip`), clips both frames
+    to the first `step_clip` updates and renders the replicate trellis:
+    **one column per `mutation_rate`** (power-of-ten rates only, increasing
+    **left to right**) and **one row per within-rate replicate** (ordered
+    by `replicate_uid`). The zoomed windows pass `drop_slowest=True` to
+    drop the `1e-9` rate, whose establishment phase is uninformative.
+    Per-step series are subsampled by a window-dependent `STRIDE` so each
+    line carries at most ~1000 points.
     """)
     return
 
 
 @app.cell
-def prep_layout(hw_df, strain_df):
+def tag_hw(hw_df, strain_df):
     N_SITES = int(hw_df["n_sites"].iloc[0])
-    STRIDE = max(1, int(strain_df["Step"].nunique()) // 1000)
-
     # Hamming weight of each genome == popcount of the strain index.
     strain_hw_df = strain_df.assign(
         hw=strain_df["strain"].map(lambda _s: bin(int(_s)).count("1")),
     )
+    return N_SITES, strain_hw_df
 
-    # Restrict to the power-of-ten mutation rates (1e-9 .. 1e-1),
-    # dropping the intermediate 3e-X conditions. Trellis columns are
-    # these rates increasing left to right; rows are within-rate
-    # replicates (ordered by replicate_uid for determinism).
-    rate_vals = [
-        _r
-        for _r in sorted(hw_df["mutation_rate"].unique().tolist())
-        if f"{_r:.0e}".startswith("1e")
-    ]
-    reps_by_rate = {
-        _rate: sorted(
-            hw_df[hw_df["mutation_rate"] == _rate]["replicate_uid"].unique(),
+
+@app.cell
+def def_make_trellis(mlines, pathlib, plt, sns, tp):
+    # Categorical Hamming-weight palette: extreme weights 0 & 3 (founder
+    # 000 and complement 111) cool, intermediate weights 1 & 2 warm.
+    _HW_COLORS = ["#2b6cb0", "#ed8936", "#c53030", "#38b2ac"]
+
+    def make_trellis(
+        hw_df,
+        strain_hw_df,
+        N_SITES,
+        step_clip=None,
+        drop_slowest=False,
+    ):
+        # Clip both frames to the first ``step_clip`` updates (or keep the
+        # full run when ``step_clip`` is None).
+        if step_clip is None:
+            _hw, _strain = hw_df, strain_hw_df
+            _clip_tag, _clip_label = "full", "all updates"
+        else:
+            _hw = hw_df[hw_df["Step"] < step_clip]
+            _strain = strain_hw_df[strain_hw_df["Step"] < step_clip]
+            _clip_tag, _clip_label = (
+                str(step_clip),
+                f"first {step_clip} updates",
+            )
+        stride = max(1, int(_strain["Step"].nunique()) // 1000)
+
+        # Power-of-ten mutation rates (ascending); optionally drop 1e-9.
+        rate_vals = [
+            _r
+            for _r in sorted(_hw["mutation_rate"].unique().tolist())
+            if f"{_r:.0e}".startswith("1e")
+            and not (drop_slowest and f"{_r:.0e}" == "1e-09")
+        ]
+        reps_by_rate = {
+            _rate: sorted(
+                _hw[_hw["mutation_rate"] == _rate]["replicate_uid"].unique(),
+            )
+            for _rate in rate_vals
+        }
+        max_reps = max(len(_r) for _r in reps_by_rate.values())
+        n_cols = len(rate_vals)
+        n_rows = int(max_reps)
+        print(
+            f"clip={_clip_tag} stride={stride} "
+            f"grid={n_rows} replicates x {n_cols} rates",
         )
-        for _rate in rate_vals
-    }
-    max_reps = max(len(_r) for _r in reps_by_rate.values())
-    print(f"N_SITES={N_SITES} STRIDE={STRIDE}")
-    print(
-        f"grid: {max_reps} replicates (rows) x {len(rate_vals)} rates (cols)"
-    )
-    return N_SITES, STRIDE, max_reps, rate_vals, reps_by_rate, strain_hw_df
+
+        with tp.teed(
+            plt.subplots,
+            nrows=n_rows,
+            ncols=n_cols,
+            figsize=(2.3 * n_cols, 1.4 * n_rows),
+            sharex=True,
+            squeeze=False,
+            teeplot_outattrs={
+                "a": "strain-vs-hw-replicate-trellis",
+                "clip": _clip_tag,
+            },
+            teeplot_show=True,
+            teeplot_subdir=pathlib.Path(__file__).stem,
+        ) as (fig, axes):
+            for _i, _rate in enumerate(rate_vals):
+                _reps = reps_by_rate[_rate]
+                for _j in range(n_rows):
+                    _ax = axes[_j][_i]
+                    if _j >= len(_reps):
+                        _ax.axis("off")
+                        continue
+                    _rid = _reps[_j]
+                    _h = _hw[_hw["replicate_uid"] == _rid].sort_values("Step")
+                    _s = _strain[_strain["replicate_uid"] == _rid].sort_values(
+                        "Step"
+                    )
+
+                    # Solid: per-genome strain prevalence, colored by hw.
+                    for _strn in sorted(_s["strain"].unique()):
+                        _ss = _s[_s["strain"] == _strn].iloc[::stride]
+                        _w = bin(int(_strn)).count("1")
+                        _ax.plot(
+                            _ss["Step"],
+                            _ss["count"],
+                            linestyle="-",
+                            linewidth=0.7,
+                            color=_HW_COLORS[_w],
+                            alpha=0.8,
+                        )
+                    # Dashed: aggregated Hamming-weight band prevalence.
+                    for _w in range(N_SITES + 1):
+                        _hh = _h[_h["hw"] == _w].iloc[::stride]
+                        _ax.plot(
+                            _hh["Step"],
+                            _hh["count"],
+                            linestyle="--",
+                            linewidth=1.0,
+                            color=_HW_COLORS[_w],
+                            alpha=0.95,
+                        )
+
+                    _ax.set_ylim(bottom=0)
+                    _ax.tick_params(labelsize=6)
+                    if _i == 0:
+                        _ax.set_ylabel(
+                            f"replicate {_j}\nprevalence",
+                            fontsize=7,
+                        )
+                    if _j == 0:
+                        _ax.set_title(f"$\\mu$={_rate:.0e}", fontsize=8)
+                    if _j == n_rows - 1:
+                        _ax.set_xlabel("Step", fontsize=7)
+                    sns.despine(ax=_ax)
+
+            # Shared legend: Hamming-weight colors + line-style meaning.
+            _handles = [
+                mlines.Line2D(
+                    [],
+                    [],
+                    color=_HW_COLORS[_w],
+                    linewidth=2.0,
+                    label=f"HW {_w}",
+                )
+                for _w in range(N_SITES + 1)
+            ]
+            _handles += [
+                mlines.Line2D(
+                    [],
+                    [],
+                    color="black",
+                    linestyle="-",
+                    linewidth=1.2,
+                    label="strain (per genome)",
+                ),
+                mlines.Line2D(
+                    [],
+                    [],
+                    color="black",
+                    linestyle="--",
+                    linewidth=1.2,
+                    label="Hamming-weight band",
+                ),
+            ]
+            fig.suptitle(_clip_label, y=1.02, fontsize=11)
+            fig.legend(
+                handles=_handles,
+                loc="upper center",
+                bbox_to_anchor=(0.5, 1.005),
+                ncol=len(_handles),
+                frameon=False,
+                fontsize=8,
+            )
+            fig.tight_layout(rect=(0, 0, 1, 0.98))
+
+    return (make_trellis,)
 
 
 @app.cell(hide_code=True)
-def delimit_plot(mo):
+def delimit_plot_full(mo):
     mo.md("""
-    ## Replicate Trajectory Trellis
+    ## Trellis --- Full Run (All Updates)
 
     One panel per replicate, trellised by `mutation_rate` (columns,
-    increasing left to right) over within-rate replicates (rows). In each
-    panel:
+    increasing left to right, all power-of-ten rates `1e-9 .. 1e-1`) over
+    within-rate replicates (rows). In each panel:
 
     - **solid** lines are individual **strain** (per-genome) prevalence
       trajectories, **color-coded by Hamming weight**;
@@ -190,137 +318,77 @@ def delimit_plot(mo):
     Hamming weights use a categorical palette in which the **extreme
     weights `0` and `3`** (the founder `000` and its complement `111`)
     are **cool** (blue / cyan) and the **intermediate weights `1` and
-    `2`** are **warm** (orange / red), so the founder-aligned and
-    intermediate classes read apart at a glance.
-
-    These are individual replicate trajectories, so **no confidence
-    interval** is drawn --- every line is one realized run. The dashed
-    band of a given color is the sum of the solid strain curves sharing
-    that Hamming weight.
+    `2`** are **warm** (orange / red). These are individual replicate
+    trajectories, so **no confidence interval** is drawn --- every line
+    is one realized run. The dashed band of a given color is the sum of
+    the solid strain curves sharing that Hamming weight.
     """)
     return
 
 
 @app.cell
-def plot_trellis(
-    N_SITES,
-    STRIDE,
-    hw_df,
-    max_reps,
-    mlines,
-    pathlib,
-    plt,
-    rate_vals,
-    reps_by_rate,
-    sns,
-    strain_hw_df,
-    tp,
-):
-    # Categorical Hamming-weight palette: extreme weights 0 & 3 (founder
-    # 000 and complement 111) cool, intermediate weights 1 & 2 warm.
-    _hw_colors = ["#2b6cb0", "#ed8936", "#c53030", "#38b2ac"]
-    _n_cols = len(rate_vals)
-    _n_rows = int(max_reps)
+def plot_full(N_SITES, hw_df, make_trellis, strain_hw_df):
+    make_trellis(hw_df, strain_hw_df, N_SITES, step_clip=None)
+    return
 
-    with tp.teed(
-        plt.subplots,
-        nrows=_n_rows,
-        ncols=_n_cols,
-        figsize=(2.3 * _n_cols, 1.4 * _n_rows),
-        sharex=True,
-        squeeze=False,
-        teeplot_outattrs={"a": "strain-vs-hw-replicate-trellis"},
-        teeplot_show=True,
-        teeplot_subdir=pathlib.Path(__file__).stem,
-    ) as (_fig, _axes):
-        for _i, _rate in enumerate(rate_vals):
-            _reps = reps_by_rate[_rate]
-            for _j in range(_n_rows):
-                _ax = _axes[_j][_i]
-                if _j >= len(_reps):
-                    _ax.axis("off")
-                    continue
-                _rid = _reps[_j]
-                _h = hw_df[hw_df["replicate_uid"] == _rid].sort_values("Step")
-                _s = strain_hw_df[
-                    strain_hw_df["replicate_uid"] == _rid
-                ].sort_values("Step")
 
-                # Solid: per-genome strain prevalence, colored by hw.
-                for _strain in sorted(_s["strain"].unique()):
-                    _ss = _s[_s["strain"] == _strain].iloc[::STRIDE]
-                    _w = bin(int(_strain)).count("1")
-                    _ax.plot(
-                        _ss["Step"],
-                        _ss["count"],
-                        linestyle="-",
-                        linewidth=0.7,
-                        color=_hw_colors[_w],
-                        alpha=0.8,
-                    )
-                # Dashed: aggregated Hamming-weight band prevalence.
-                for _w in range(N_SITES + 1):
-                    _hh = _h[_h["hw"] == _w].iloc[::STRIDE]
-                    _ax.plot(
-                        _hh["Step"],
-                        _hh["count"],
-                        linestyle="--",
-                        linewidth=1.0,
-                        color=_hw_colors[_w],
-                        alpha=0.95,
-                    )
+@app.cell(hide_code=True)
+def delimit_plot_2000(mo):
+    mo.md("""
+    ## Trellis --- First 2000 Updates
 
-                _ax.set_ylim(bottom=0)
-                _ax.tick_params(labelsize=6)
-                if _i == 0:
-                    _ax.set_ylabel(
-                        f"replicate {_j}\nprevalence",
-                        fontsize=7,
-                    )
-                if _j == 0:
-                    _ax.set_title(f"$\\mu$={_rate:.0e}", fontsize=8)
-                if _j == _n_rows - 1:
-                    _ax.set_xlabel("Step", fontsize=7)
-                sns.despine(ax=_ax)
+    The same trellis clipped to the first **2000** updates (and dropping
+    the slowest `1e-9` rate) to zoom in on the establishment phase and
+    the start of the endemic plateau.
+    """)
+    return
 
-        # Shared legend: Hamming-weight colors + line-style meaning.
-        _handles = [
-            mlines.Line2D(
-                [],
-                [],
-                color=_hw_colors[_w],
-                linewidth=2.0,
-                label=f"HW {_w}",
-            )
-            for _w in range(N_SITES + 1)
-        ]
-        _handles += [
-            mlines.Line2D(
-                [],
-                [],
-                color="black",
-                linestyle="-",
-                linewidth=1.2,
-                label="strain (per genome)",
-            ),
-            mlines.Line2D(
-                [],
-                [],
-                color="black",
-                linestyle="--",
-                linewidth=1.2,
-                label="Hamming-weight band",
-            ),
-        ]
-        _fig.legend(
-            handles=_handles,
-            loc="upper center",
-            bbox_to_anchor=(0.5, 1.005),
-            ncol=len(_handles),
-            frameon=False,
-            fontsize=8,
-        )
-        _fig.tight_layout(rect=(0, 0, 1, 0.99))
+
+@app.cell
+def plot_2000(N_SITES, hw_df, make_trellis, strain_hw_df):
+    make_trellis(
+        hw_df, strain_hw_df, N_SITES, step_clip=2000, drop_slowest=True
+    )
+    return
+
+
+@app.cell(hide_code=True)
+def delimit_plot_400(mo):
+    mo.md("""
+    ## Trellis --- First 400 Updates
+
+    Clipped tighter, to the first **400** updates, to resolve the early
+    outbreak peak and the first strain-divergence transient before the
+    bands settle.
+    """)
+    return
+
+
+@app.cell
+def plot_400(N_SITES, hw_df, make_trellis, strain_hw_df):
+    make_trellis(
+        hw_df, strain_hw_df, N_SITES, step_clip=400, drop_slowest=True
+    )
+    return
+
+
+@app.cell(hide_code=True)
+def delimit_plot_200(mo):
+    mo.md("""
+    ## Trellis --- First 200 Updates
+
+    The tightest zoom, to the first **200** updates, isolating the
+    initial founder-driven epidemic wave and the very first appearance
+    of mutant strains.
+    """)
+    return
+
+
+@app.cell
+def plot_200(N_SITES, hw_df, make_trellis, strain_hw_df):
+    make_trellis(
+        hw_df, strain_hw_df, N_SITES, step_clip=200, drop_slowest=True
+    )
     return
 
 
