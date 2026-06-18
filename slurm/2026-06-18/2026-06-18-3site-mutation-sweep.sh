@@ -281,10 +281,24 @@ run_replicate() {
     local repdir="\${JOBDIR}/r\${gid}"
     mkdir -p "\${repdir}"
     cd "\${repdir}"
+    # Export from a PRIVATE per-replicate copy of the notebook. Every
+    # replicate --- within this task and across all array tasks sharing
+    # the single _jobsource clone on the network filesystem --- would
+    # otherwise run marimo against the same notebook file. Under that
+    # concurrency marimo clobbers the shared source to an empty default
+    # stub (marimo.App() with one empty cell), after which every later
+    # export yields a blank notebook with no outdata. A private copy
+    # removes the shared-file race. The notebook does 'from pylib import
+    # ...' and marimo puts the notebook's own directory on sys.path, so
+    # the private copy sits beside a pylib symlink.
+    local nbdir="\${repdir}/_nb"
+    mkdir -p "\${nbdir}"
+    cp "${BATCHDIR_JOBSOURCE}/${NOTEBOOK_PATH}" "\${nbdir}/${NOTEBOOK_NAME}.py"
+    ln -sfn "${BATCHDIR_JOBSOURCE}/pylib" "\${nbdir}/pylib"
     echo "  [gid=\${gid}] N_SITES=${N_SITES} MUTATION_RATE=\${rate} SEED=\${seed} repdir=\${repdir}"
     MPLBACKEND=Agg python3.10 -m marimo export ipynb \
         --include-outputs --sort topological -f \
-        "${BATCHDIR_JOBSOURCE}/${NOTEBOOK_PATH}" \
+        "\${nbdir}/${NOTEBOOK_NAME}.py" \
         -o "\${repdir}/${NOTEBOOK_NAME}.ipynb" \
         -- \
         --n-sites ${N_SITES} \
