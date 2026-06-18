@@ -240,7 +240,7 @@ cat > "${SBATCH_FILE}" << EOF
 #SBATCH --mail-type=FAIL,TIME_LIMIT,ARRAY_TASKS
 #SBATCH --account=ecode
 #SBATCH --requeue
-#SBATCH --array=0-$((N_ARRAY_TASKS - 1))
+#SBATCH --array=0-849
 
 ${JOB_PREAMBLE}
 
