@@ -18,12 +18,11 @@ def import_pkg():
     import matplotlib.pyplot as plt
     import numpy as np
     import pandas as pd
-    import requests
     import seaborn as sns
     from teeplot import teeplot as tp
     from watermark import watermark
 
-    return mlines, mo, np, pd, plt, requests, sns, tp, watermark
+    return mlines, mo, np, pd, plt, sns, tp, watermark
 
 
 @app.cell(hide_code=True)
@@ -57,62 +56,61 @@ def delimit_data(mo):
     per-replicate **strain** and **Hamming-weight** prevalence time
     series for the 2-site model (`N_SITES=2`, so genomes are `00, 01, 10,
     11` --- strain indices `0 .. 3` --- and Hamming weights run `0 .. 2`).
-    The mutation-rate sweep covers 7 conditions spanning `1e-4` to `1e-1`
-    (~2 points per decade), 5000 steps per replicate,
+    The mutation-rate sweep covers all 17 conditions spanning `1e-9` to
+    `1e-1` (~2 points per decade), 5000 steps per replicate,
     POP_SIZE=1_000_000, on CPU (engine=numpy).
 
-    Four long-form frames back this notebook, keyed by `replicate_uid`
-    and `Step`:
+    The data are read from the **committed local parquets** under
+    `bindle/data/2026-06-18-2site-mutation-sweep/` (checked into the repo
+    during an OSF outage), so this notebook is fully self-contained and
+    needs no network access. Two long-form frames back the trellis and
+    one backs the end-state statistics, all keyed by `replicate_uid` and
+    `Step`:
 
-    - **strain-samples** (`gycde`): per-genome prevalence **trajectory**
-      (one row per `(replicate_uid, Step, strain)`), a handful of
-      replicates per rate --- backs the trellis solid lines.
-    - **hw-samples** (`96gxr`): per-Hamming-weight band prevalence
-      **trajectory** (one row per `(replicate_uid, Step, hw)`) --- backs
-      the trellis dashed lines.
-    - **strain-final** (`ybgwp`): per-genome **end state** only (final
-      step, ~200 replicates per rate) --- backs the end-state
-      complement-absence statistics.
-    - **hw-final** (`x7qmt`): per-Hamming-weight band **end state** ---
-      loaded for reference (the complement statistic needs the
-      per-genome `strain-final` frame, so `hw-final` is not plotted
-      here).
+    - **strain-samples**: per-genome prevalence **trajectory** (one row
+      per `(replicate_uid, Step, strain)`), 3 replicates per rate ---
+      backs the trellis solid lines.
+    - **hw-samples**: per-Hamming-weight band prevalence **trajectory**
+      (one row per `(replicate_uid, Step, hw)`) --- backs the trellis
+      dashed lines.
+    - **strain-final**: per-genome **end state** only (final step, ~200
+      replicates per rate) --- backs the end-state complement-absence
+      statistics.
 
-    This is a **visualization notebook** (no CLI arguments): the OSF
-    slugs are hard-coded below and downloaded with `requests`, cached at
-    `/tmp/<slug>` so re-runs hit the local copy.
+    (The sibling `hw-final` / `traj-samples` parquets in the same
+    directory are not needed for these plots.)
     """
     )
     return
 
 
 @app.cell
-def def_fetch(pathlib, pd, requests):
-    # Shared OSF fetcher with /tmp caching (this is a visualization
-    # notebook with no CLI arguments --- all slugs are hard-coded).
-    def fetch_osf(slug):
-        cache_path = pathlib.Path("/tmp") / slug
-        url = f"https://osf.io/{slug}/download"
-        if not cache_path.exists():
-            print(f"downloading {url} -> {cache_path}")
-            resp = requests.get(url, allow_redirects=True, timeout=240)
-            resp.raise_for_status()
-            cache_path.write_bytes(resp.content)
-        else:
-            print(f"reusing cached {cache_path}")
-        print(f"size: {cache_path.stat().st_size} bytes")
-        return pd.read_parquet(cache_path)
+def def_loader(pathlib, pd):
+    # Read the committed local 2-site sweep parquets (checked into the
+    # repo under bindle/data/<job>/ during an OSF outage) --- no network.
+    _DATA_DIR = (
+        pathlib.Path(__file__).parent
+        / "data"
+        / "2026-06-18-2site-mutation-sweep"
+    )
+    _JOB = "2026-06-18-2site-mutation-sweep"
 
-    return (fetch_osf,)
+    def load_local(kind):
+        _path = _DATA_DIR / f"a={kind}+date=2026-06-18+job={_JOB}+ext=.pqt"
+        print(f"loading {_path.name}")
+        _df = pd.read_parquet(_path)
+        print(f"  -> {_df.shape}")
+        return _df
+
+    return (load_local,)
 
 
 @app.cell
-def download_data(fetch_osf):
-    # strain-samples (gycde) = per-genome prevalence trajectory;
-    # hw-samples (96gxr) = per-Hamming-weight band prevalence trajectory.
-    # These back the replicate trajectory trellis.
-    strain_df = fetch_osf("gycde")
-    hw_df = fetch_osf("96gxr")
+def download_data(load_local):
+    # strain-samples = per-genome prevalence trajectory; hw-samples =
+    # per-Hamming-weight band prevalence trajectory. Back the trellis.
+    strain_df = load_local("strain-samples")
+    hw_df = load_local("hw-samples")
     print(f"loaded strain-samples dataframe: {strain_df.shape}")
     print(f"loaded hw-samples dataframe: {hw_df.shape}")
     print(
@@ -123,11 +121,10 @@ def download_data(fetch_osf):
 
 
 @app.cell
-def download_strain_final(fetch_osf):
-    # strain-final (ybgwp) = per-genome END-STATE (final step only) with
-    # ~200 replicates per mutation rate --- backs the end-state
-    # complement-absence statistics.
-    strain_final_df = fetch_osf("ybgwp")
+def download_strain_final(load_local):
+    # strain-final = per-genome END-STATE (final step only) with ~200
+    # replicates per mutation rate --- backs the complement statistics.
+    strain_final_df = load_local("strain-final")
     print(f"loaded strain-final dataframe: {strain_final_df.shape}")
     print(
         "mutation_rate x replicate counts (strain-final):\n"
@@ -152,7 +149,7 @@ def delimit_prep(mo):
     that, for an optional **step window** (`step_clip`), clips both frames
     to the first `step_clip` updates and renders the replicate trellis:
     **one column per `mutation_rate`** (power-of-ten rates only, so
-    `1e-4 .. 1e-1`, increasing **left to right**) and **one row per
+    `1e-9 .. 1e-1`, increasing **left to right**) and **one row per
     within-rate replicate** (ordered by `replicate_uid`). Per-step series
     are subsampled by a window-dependent `STRIDE` so each line carries at
     most ~1000 points.
@@ -326,7 +323,7 @@ def delimit_plot_full(mo):
     ## Trellis --- Full Run (All Updates)
 
     One panel per replicate, trellised by `mutation_rate` (columns,
-    increasing left to right, power-of-ten rates `1e-4 .. 1e-1`) over
+    increasing left to right, power-of-ten rates `1e-9 .. 1e-1`) over
     within-rate replicates (rows). In each panel:
 
     - **solid** lines are individual **strain** (per-genome) prevalence
