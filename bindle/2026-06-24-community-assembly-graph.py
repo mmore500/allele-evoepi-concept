@@ -99,8 +99,8 @@ def delimit_setup(mo):
       emits milestone rows at `continuous_steps` = 10, 30, 100, 300 (those
       it reaches) and a terminal `extinct=True` row when the episode ends.
       The persistence threshold is therefore already encoded in
-      `continuous_steps`; we use the **30-step** threshold for calling
-      introductions/extinctions (not 10, 100, or 300). An `extinct=True`
+      `continuous_steps`; we use the **300-step** threshold for calling
+      introductions/extinctions (not 10, 30, or 100). An `extinct=True`
       row at a step *before* the final step is a genuine extinction; one
       at the final step is right-censoring (the strain is still present).
     - **dominant** (`nmzrj`) --- final-step (`Step == n_steps - 1`)
@@ -123,8 +123,8 @@ def configure_args(mo):
     DOM_SLUG = str(_args.get("dominant-slug") or "nmzrj")
     EX_SLUG = str(_args.get("examples-slug") or "f4bzv")
     # persistence threshold (days/steps) for introduction & extinction
-    # calling; the main parquet encodes 10/30/100/300 --- we use 30.
-    THRESHOLD = int(_args.get("threshold") or 30)
+    # calling; the main parquet encodes 10/30/100/300 --- we use 300.
+    THRESHOLD = int(_args.get("threshold") or 300)
     print(
         f"args: MAIN_SLUG={MAIN_SLUG} DOM_SLUG={DOM_SLUG} "
         f"EX_SLUG={EX_SLUG} THRESHOLD={THRESHOLD}",
@@ -210,7 +210,7 @@ def delimit_build(mo):
     For each replicate we reconstruct the ordered sequence of community
     states (the *transition sequence*) from the presence-episode log.
 
-    **Presence calling (30-step threshold).** Walking each strain's rows
+    **Presence calling (300-step threshold).** Walking each strain's rows
     in time order, episodes are delimited by `extinct=True` rows. An
     episode counts as a real *introduction* only if it reaches
     `continuous_steps >= THRESHOLD` (briefer blips are dropped). The
