@@ -362,6 +362,16 @@ def def_assemble(
                 continue
             seq.append(ps)
 
+        # Every run is seeded with the 000 wildtype present, so the
+        # transition sequence always begins at the {000} founder node
+        # (relabeling leaves 000 fixed). Prepend it when the threshold
+        # dynamics don't already start there (e.g. at high mutation rate,
+        # where the founder's first episode can blip out before the
+        # 30-step threshold while a complement strain establishes).
+        founder = frozenset({0})
+        if not seq or seq[0] != founder:
+            seq = [founder] + seq
+
         converged = False
         if converged_run:
             for idx, ps in enumerate(seq):
