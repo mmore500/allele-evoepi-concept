@@ -159,9 +159,7 @@ def download_data(DOM_SLUG, EX_SLUG, MAIN_SLUG, download_parquet):
     N_SITES = int(main_df["n_sites"].iloc[0])
     FULL = (1 << N_SITES) - 1  # all-ones strain (complement of wildtype)
     N_STEPS = int(main_df["n_steps"].iloc[0])
-    print(
-        f"main: {main_df.shape}  dominant: {dom_df.shape}  ex: {ex_df.shape}"
-    )
+    print(f"main: {main_df.shape}  dominant: {dom_df.shape}  ex: {ex_df.shape}")
     print(f"N_SITES={N_SITES} FULL={FULL:0{N_SITES}b} N_STEPS={N_STEPS}")
     print(
         "replicates per mutation_rate:\n"
@@ -345,9 +343,7 @@ def def_assemble(
     # for converged runs, plus U for runs that fail to converge. The
     # 000/111 pair (wildtype + all-ones) is outlined green and U red; the
     # remaining pairs get their own distinct outline colors.
-    PAIR_KEYS = [
-        pair_key(s, s ^ FULL) for s in range(FULL + 1) if s <= s ^ FULL
-    ]
+    PAIR_KEYS = [pair_key(s, s ^ FULL) for s in range(FULL + 1) if s <= s ^ FULL]
     _pair_palette = ["green", "#1f77b4", "#ff7f0e", "#9467bd", "#8c564b"]
     END_OUTLINE = {pk: _pair_palette[i] for i, pk in enumerate(PAIR_KEYS)}
     END_OUTLINE["000/111"] = "green"
@@ -753,7 +749,9 @@ def def_aggregate(defaultdict, is_end_key, path_with_end):
         # Transient community nodes (frozensets) are pruned by occurrence;
         # special end nodes (complement pairs and U) are always kept, as is
         # the 000 founder.
-        keep = {k for k, v in agg["trans_count"].items() if v >= min_count}
+        keep = {
+            k for k, v in agg["trans_count"].items() if v >= min_count
+        }
         keep |= set(agg["end_count"].keys())
         keep.add(frozenset({0}))
         occ_nodes = set(agg["trans_count"]) | set(agg["end_count"])
@@ -897,7 +895,9 @@ def def_layout(defaultdict, is_end_key, np):
         sizes = sorted(x for x in cols if x is not None)
         maxx = max(sizes) if sizes else 1
         for x in sizes:
-            nodes = sorted(cols[x], key=lambda k: (-len(k), tuple(sorted(k))))
+            nodes = sorted(
+                cols[x], key=lambda k: (-len(k), tuple(sorted(k)))
+            )
             n = len(nodes)
             ys = (
                 np.linspace(-(n - 1) / 2.0, (n - 1) / 2.0, n)
@@ -954,7 +954,9 @@ def def_plot_mu(
         # disjoint classes, sized on separate scales.
         end_nodes = {k for k in nodes if is_end_key(k)}
         max_end = max([ec.get(k, 0) for k in end_nodes] + [1])
-        max_tr = max([tc.get(k, 0) for k in nodes if k not in end_nodes] + [1])
+        max_tr = max(
+            [tc.get(k, 0) for k in nodes if k not in end_nodes] + [1]
+        )
 
         g = ig.Graph(directed=True)
         g.add_vertices(len(nodes))
