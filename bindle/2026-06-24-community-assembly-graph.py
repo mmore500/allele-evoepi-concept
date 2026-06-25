@@ -6,8 +6,8 @@ app = marimo.App(width="full")
 
 @app.cell
 def import_std():
-    import pathlib
     from collections import defaultdict
+    import pathlib
 
     return defaultdict, pathlib
 
