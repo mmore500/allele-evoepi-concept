@@ -159,7 +159,9 @@ def download_data(DOM_SLUG, EX_SLUG, MAIN_SLUG, download_parquet):
     N_SITES = int(main_df["n_sites"].iloc[0])
     FULL = (1 << N_SITES) - 1  # all-ones strain (complement of wildtype)
     N_STEPS = int(main_df["n_steps"].iloc[0])
-    print(f"main: {main_df.shape}  dominant: {dom_df.shape}  ex: {ex_df.shape}")
+    print(
+        f"main: {main_df.shape}  dominant: {dom_df.shape}  ex: {ex_df.shape}"
+    )
     print(f"N_SITES={N_SITES} FULL={FULL:0{N_SITES}b} N_STEPS={N_STEPS}")
     print(
         "replicates per mutation_rate:\n"
@@ -234,9 +236,11 @@ def delimit_build(mo):
     prevalence only at early episode milestones, the >50% test is applied
     to the accurate **final-step** relative prevalence
     `(count_D + count_comp) / total_cases` (from the dominant parquet);
-    the sequence is then cut off at the first community in which both `D`
-    and `comp` are present. Replicates that **fail to converge** terminate
-    in a special end node labelled **`U`**.
+    the sequence is then cut off one community past the first in which both
+    `D` and `comp` are present --- keeping that first co-occurrence
+    community so the one the complement arose in is shown --- before
+    transitioning to the complement-pair end node. Replicates that **fail
+    to converge** terminate in a special end node labelled **`U`**.
     """
     )
     return
@@ -341,7 +345,9 @@ def def_assemble(
     # for converged runs, plus U for runs that fail to converge. The
     # 000/111 pair (wildtype + all-ones) is outlined green and U red; the
     # remaining pairs get their own distinct outline colors.
-    PAIR_KEYS = [pair_key(s, s ^ FULL) for s in range(FULL + 1) if s <= s ^ FULL]
+    PAIR_KEYS = [
+        pair_key(s, s ^ FULL) for s in range(FULL + 1) if s <= s ^ FULL
+    ]
     _pair_palette = ["green", "#1f77b4", "#ff7f0e", "#9467bd", "#8c564b"]
     END_OUTLINE = {pk: _pair_palette[i] for i, pk in enumerate(PAIR_KEYS)}
     END_OUTLINE["000/111"] = "green"
@@ -357,8 +363,9 @@ def def_assemble(
         Returns ``(path, converged, pair)``. ``path`` is the list of
         relabeled ``frozenset`` community states (all transient). For a
         converged run, ``pair`` is the complement-pair end-node label and
-        ``path`` is cut off just before the dominant strain and its
-        complement first co-occur; the caller appends ``pair`` as the
+        ``path`` is cut off one past the dominant strain and its complement
+        first co-occurring (keeping that community, so the one the
+        complement arose in is shown); the caller appends ``pair`` as the
         terminal end node. A non-converging run has ``pair is None`` and
         the caller appends ``"U"`` instead.
         """
@@ -400,15 +407,16 @@ def def_assemble(
             seq = [founder] + seq
 
         # Cut off once the end-dominant strain and its complement have both
-        # appeared; the converged outcome is collapsed into a complement-
-        # pair end node, so the community sequence stops just before the
-        # first community in which both co-occur.
+        # appeared, keeping that first co-occurrence community (one past the
+        # complement's arrival) so the community the complement arose in is
+        # visible; the converged outcome then collapses into a complement-
+        # pair end node.
         converged = False
         pair = None
         if converged_run:
             for idx, ps in enumerate(seq):
                 if D in ps and comp in ps:
-                    seq = seq[:idx]
+                    seq = seq[: idx + 1]
                     converged = True
                     pair = pair_key(remap(D), remap(comp))
                     break
@@ -698,14 +706,17 @@ def delimit_combine(mo):
     outgoing transitions** that it accounts for. Sparse transient
     nodes/edges are pruned for legibility via per-mutation-rate
     minimum-occurrence thresholds; the special end nodes and the `000`
-    founder are always kept.
+    founder are always kept. Pruning is then *repaired* so every kept node
+    retains a directed path to some end node: any node stranded by edge
+    pruning has the shortest higher-traffic path back to an end node added
+    from the full transition graph.
     """
     )
     return
 
 
 @app.cell
-def def_aggregate(defaultdict, path_with_end):
+def def_aggregate(defaultdict, is_end_key, path_with_end):
     def aggregate(reps_df):
         """Tally node/edge occurrences across a mutation rate's replicates."""
         uids = reps_df["replicate_uid"].unique()
@@ -742,9 +753,7 @@ def def_aggregate(defaultdict, path_with_end):
         # Transient community nodes (frozensets) are pruned by occurrence;
         # special end nodes (complement pairs and U) are always kept, as is
         # the 000 founder.
-        keep = {
-            k for k, v in agg["trans_count"].items() if v >= min_count
-        }
+        keep = {k for k, v in agg["trans_count"].items() if v >= min_count}
         keep |= set(agg["end_count"].keys())
         keep.add(frozenset({0}))
         occ_nodes = set(agg["trans_count"]) | set(agg["end_count"])
@@ -754,6 +763,67 @@ def def_aggregate(defaultdict, path_with_end):
             for e, c in agg["edge_count"].items()
             if c >= min_edge and e[0] in keep and e[1] in keep
         }
+
+        # Repair reachability: every kept node must retain a directed path
+        # to some end node (complement pair or U). Pruning can strand a node
+        # by dropping all its outgoing edges, so for any stranded node we add
+        # back the shortest path to an end node from the full transition
+        # graph, preferring higher-traffic edges.
+        full_succ = defaultdict(list)
+        for (a, b), _c in sorted(
+            agg["edge_count"].items(), key=lambda kv: -kv[1]
+        ):
+            full_succ[a].append(b)
+
+        def reaches_end():
+            radj = defaultdict(list)
+            for a, b in kept_edges:
+                radj[b].append(a)
+            seen = {k for k in keep if is_end_key(k)}
+            stack = list(seen)
+            while stack:
+                x = stack.pop()
+                for p in radj[x]:
+                    if p in keep and p not in seen:
+                        seen.add(p)
+                        stack.append(p)
+            return seen
+
+        reach = reaches_end()
+        for n in list(keep):
+            if is_end_key(n) or n in reach:
+                continue
+            prev = {n: None}
+            queue = [n]
+            qi = 0
+            hit = None
+            while qi < len(queue):
+                x = queue[qi]
+                qi += 1
+                if x != n and (is_end_key(x) or x in reach):
+                    hit = x
+                    break
+                for b in full_succ.get(x, []):
+                    if b not in prev:
+                        prev[b] = x
+                        queue.append(b)
+            if hit is None:
+                continue
+            cur = hit
+            while prev[cur] is not None:
+                p = prev[cur]
+                kept_edges[(p, cur)] = agg["edge_count"][(p, cur)]
+                keep.add(p)
+                keep.add(cur)
+                cur = p
+            reach = reaches_end()
+
+        # Drop end nodes left with no incoming edge (an outcome whose only
+        # transitions were pruned); end nodes never have outgoing edges, so
+        # this strands nothing.
+        indeg = {b for (_a, b) in kept_edges}
+        keep = {k for k in keep if (not is_end_key(k)) or k in indeg}
+
         return keep, kept_edges
 
     return aggregate, build_graph
@@ -806,6 +876,10 @@ def delimit_plot(mo):
     transitions. The `000/111` complement-pair end node is outlined
     **green** and the non-convergence `U` end node **red**; the remaining
     pairs carry their own outline colors.
+
+    Two versions of each graph are rendered and saved (tagged via
+    `teeplot_outattrs` `edge-labels=pct` vs `edge-labels=none`): one with
+    the edge percentage labels and one with bare arrows.
     """
     )
     return
@@ -823,9 +897,7 @@ def def_layout(defaultdict, is_end_key, np):
         sizes = sorted(x for x in cols if x is not None)
         maxx = max(sizes) if sizes else 1
         for x in sizes:
-            nodes = sorted(
-                cols[x], key=lambda k: (-len(k), tuple(sorted(k)))
-            )
+            nodes = sorted(cols[x], key=lambda k: (-len(k), tuple(sorted(k))))
             n = len(nodes)
             ys = (
                 np.linspace(-(n - 1) / 2.0, (n - 1) / 2.0, n)
@@ -862,7 +934,7 @@ def def_plot_mu(
     plt,
     sns,
 ):
-    def plot_mu(mu, bundle, ax, legend_ax, palette="husl"):
+    def plot_mu(mu, bundle, ax, legend_ax, palette="husl", edge_labels=True):
         agg = bundle["agg"]
         keep = bundle["keep"]
         kept_edges = bundle["edges"]
@@ -882,9 +954,7 @@ def def_plot_mu(
         # disjoint classes, sized on separate scales.
         end_nodes = {k for k in nodes if is_end_key(k)}
         max_end = max([ec.get(k, 0) for k in end_nodes] + [1])
-        max_tr = max(
-            [tc.get(k, 0) for k in nodes if k not in end_nodes] + [1]
-        )
+        max_tr = max([tc.get(k, 0) for k in nodes if k not in end_nodes] + [1])
 
         g = ig.Graph(directed=True)
         g.add_vertices(len(nodes))
@@ -923,7 +993,7 @@ def def_plot_mu(
             g,
             layout=[coords[k] for k in nodes],
             vertex_labels=vlabel,
-            edge_labels=elabel,
+            edge_labels=(elabel if edge_labels else None),
             ax=ax,
             vertex_facecolor=vface,
             vertex_edgecolor=vedge,
@@ -993,6 +1063,8 @@ def def_plot_mu(
 
 @app.cell
 def render_graphs(aggregates, mutation_rates, pathlib, plot_mu, plt, tp):
+    # Render two versions per mutation rate: one with the edge percentage
+    # labels and one without (arrows only). teeplot_outattrs tag them apart.
     for _mu in mutation_rates:
         _bundle = aggregates[_mu]
         _n_nodes = len(_bundle["keep"])
@@ -1004,18 +1076,20 @@ def render_graphs(aggregates, mutation_rates, pathlib, plot_mu, plt, tp):
             )
             return fig, (ax, lax)
 
-        with tp.teed(
-            _factory,
-            figsize=(14 if _wide else 13, 8.5 if _wide else 7.5),
-            teeplot_outattrs={
-                "a": "community-assembly-graph",
-                "mutation-rate": f"{_mu:.0e}",
-            },
-            teeplot_outexclude="viz",
-            teeplot_show=True,
-            teeplot_subdir=pathlib.Path(__file__).stem,
-        ) as (fig, (ax, lax)):
-            plot_mu(_mu, _bundle, ax, lax)
+        for _edge_labels, _tag in [(True, "pct"), (False, "none")]:
+            with tp.teed(
+                _factory,
+                figsize=(14 if _wide else 13, 8.5 if _wide else 7.5),
+                teeplot_outattrs={
+                    "a": "community-assembly-graph",
+                    "mutation-rate": f"{_mu:.0e}",
+                    "edge-labels": _tag,
+                },
+                teeplot_outexclude="viz",
+                teeplot_show=True,
+                teeplot_subdir=pathlib.Path(__file__).stem,
+            ) as (fig, (ax, lax)):
+                plot_mu(_mu, _bundle, ax, lax, edge_labels=_edge_labels)
     return
 
 
