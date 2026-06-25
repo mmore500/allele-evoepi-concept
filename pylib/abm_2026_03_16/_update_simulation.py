@@ -25,6 +25,7 @@ def update_simulation(
     MUTATION_THRESHOLD: float = 0.0,
     IMMUNITY_CEILING: float = 1.0,
     IMMUNITY_FLOOR: float = 0.0,
+    TRANSMISSIBILITY=1.0,
     xp=None,
 ) -> Tuple:
     """Run one step of the simulation."""
@@ -39,6 +40,7 @@ def update_simulation(
         N_SITES,
         CONTACT_RATE,
         IMMUNE_STRENGTH,
+        TRANSMISSIBILITY,
         xp=xp,
     )
     pathogen_genomes = apply_mutations(
