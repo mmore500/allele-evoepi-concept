@@ -99,8 +99,8 @@ def delimit_setup(mo):
       emits milestone rows at `continuous_steps` = 10, 30, 100, 300 (those
       it reaches) and a terminal `extinct=True` row when the episode ends.
       The persistence threshold is therefore already encoded in
-      `continuous_steps`; we use the **30-step** threshold for calling
-      introductions/extinctions (not 10, 100, or 300). An `extinct=True`
+      `continuous_steps`; we use the **300-step** threshold for calling
+      introductions/extinctions (not 10, 30, or 100). An `extinct=True`
       row at a step *before* the final step is a genuine extinction; one
       at the final step is right-censoring (the strain is still present).
     - **dominant** (`nmzrj`) --- final-step (`Step == n_steps - 1`)
@@ -123,8 +123,8 @@ def configure_args(mo):
     DOM_SLUG = str(_args.get("dominant-slug") or "nmzrj")
     EX_SLUG = str(_args.get("examples-slug") or "f4bzv")
     # persistence threshold (days/steps) for introduction & extinction
-    # calling; the main parquet encodes 10/30/100/300 --- we use 30.
-    THRESHOLD = int(_args.get("threshold") or 30)
+    # calling; the main parquet encodes 10/30/100/300 --- we use 300.
+    THRESHOLD = int(_args.get("threshold") or 300)
     print(
         f"args: MAIN_SLUG={MAIN_SLUG} DOM_SLUG={DOM_SLUG} "
         f"EX_SLUG={EX_SLUG} THRESHOLD={THRESHOLD}",
@@ -210,7 +210,7 @@ def delimit_build(mo):
     For each replicate we reconstruct the ordered sequence of community
     states (the *transition sequence*) from the presence-episode log.
 
-    **Presence calling (30-step threshold).** Walking each strain's rows
+    **Presence calling (300-step threshold).** Walking each strain's rows
     in time order, episodes are delimited by `extinct=True` rows. An
     episode counts as a real *introduction* only if it reaches
     `continuous_steps >= THRESHOLD` (briefer blips are dropped). The
@@ -234,9 +234,11 @@ def delimit_build(mo):
     prevalence only at early episode milestones, the >50% test is applied
     to the accurate **final-step** relative prevalence
     `(count_D + count_comp) / total_cases` (from the dominant parquet);
-    the sequence is then cut off at the first community in which both `D`
-    and `comp` are present. Replicates that **fail to converge** terminate
-    in a special end node labelled **`U`**.
+    the sequence is then cut off one community past the first in which both
+    `D` and `comp` are present --- keeping that first co-occurrence
+    community so the one the complement arose in is shown --- before
+    transitioning to the complement-pair end node. Replicates that **fail
+    to converge** terminate in a special end node labelled **`U`**.
     """
     )
     return
@@ -324,16 +326,44 @@ def def_assemble(
     build_intervals,
     conv_info,
     defaultdict,
+    FULL,
     N_SITES,
     N_STEPS,
     relabel_fn,
 ):
+    def binstr(strain):
+        return format(strain, f"0{N_SITES}b")
+
+    def pair_key(a, b):
+        """Canonical label for a complement-pair end node, e.g. 000/111."""
+        lo, hi = sorted((a, b))
+        return f"{binstr(lo)}/{binstr(hi)}"
+
+    # Special end nodes (drawn like the U node): one per complement pair
+    # for converged runs, plus U for runs that fail to converge. The
+    # 000/111 pair (wildtype + all-ones) is outlined green and U red; the
+    # remaining pairs get their own distinct outline colors.
+    PAIR_KEYS = [pair_key(s, s ^ FULL) for s in range(FULL + 1) if s <= s ^ FULL]
+    _pair_palette = ["green", "#1f77b4", "#ff7f0e", "#9467bd", "#8c564b"]
+    END_OUTLINE = {pk: _pair_palette[i] for i, pk in enumerate(PAIR_KEYS)}
+    END_OUTLINE["000/111"] = "green"
+    END_OUTLINE["U"] = "red"
+
+    def is_end_key(key):
+        """Special end node (complement pair or U) vs. transient community."""
+        return isinstance(key, str)
+
     def assemble(uid, rep_df):
         """Build a replicate's transition sequence.
 
-        Returns ``(path, converged)`` where ``path`` is a list of
-        ``frozenset`` community states (relabeled strain ints). When the
-        run fails to converge the caller appends the ``"U"`` end node.
+        Returns ``(path, converged, pair)``. ``path`` is the list of
+        relabeled ``frozenset`` community states (all transient). For a
+        converged run, ``pair`` is the complement-pair end-node label and
+        ``path`` is cut off one past the dominant strain and its complement
+        first co-occurring (keeping that community, so the one the
+        complement arose in is shown); the caller appends ``pair`` as the
+        terminal end node. A non-converging run has ``pair is None`` and
+        the caller appends ``"U"`` instead.
         """
         intervals = build_intervals(rep_df)
         remap = relabel_fn(intervals)
@@ -362,33 +392,65 @@ def def_assemble(
                 continue
             seq.append(ps)
 
+        # Every run is seeded with the 000 wildtype present, so the
+        # transition sequence always begins at the {000} founder node
+        # (relabeling leaves 000 fixed). Prepend it when the threshold
+        # dynamics don't already start there (e.g. at high mutation rate,
+        # where the founder's first episode can blip out before the
+        # 30-step threshold while a complement strain establishes).
+        founder = frozenset({0})
+        if not seq or seq[0] != founder:
+            seq = [founder] + seq
+
+        # Cut off once the end-dominant strain and its complement have both
+        # appeared, keeping that first co-occurrence community (one past the
+        # complement's arrival) so the community the complement arose in is
+        # visible; the converged outcome then collapses into a complement-
+        # pair end node.
         converged = False
+        pair = None
         if converged_run:
             for idx, ps in enumerate(seq):
                 if D in ps and comp in ps:
                     seq = seq[: idx + 1]
                     converged = True
+                    pair = pair_key(remap(D), remap(comp))
                     break
 
         path = [frozenset(remap(s) for s in ps) for ps in seq]
-        return path, converged
+        return path, converged, pair
 
     def path_with_end(uid, rep_df):
-        path, converged = assemble(uid, rep_df)
+        path, converged, pair = assemble(uid, rep_df)
         keys = list(path)
-        if not converged:
-            keys = keys + ["U"]
+        keys.append(pair if converged else "U")
         return keys, converged
-
-    def binstr(strain):
-        return format(strain, f"0{N_SITES}b")
 
     def node_text(key):
         if key == "U":
-            return "U"
+            return "U  (failed to converge)"
+        if is_end_key(key):
+            return f"{key}  (converged pair)"
         return ", ".join(binstr(s) for s in sorted(key))
 
-    return assemble, binstr, node_text, path_with_end
+    def node_count_label(key):
+        # Number of strains present (complement-pair end nodes hold 2).
+        if key == "U":
+            return "U"
+        if is_end_key(key):
+            return "2"
+        return str(len(key))
+
+    return (
+        END_OUTLINE,
+        PAIR_KEYS,
+        assemble,
+        binstr,
+        is_end_key,
+        node_count_label,
+        node_text,
+        path_with_end,
+    )
 
 
 @app.cell
@@ -418,18 +480,35 @@ def delimit_examples(mo):
     figure per mutation rate (each row is one replicate). Nodes are
     color-coded by their community (present-strain set) via the key on
     the right; the **number on each node is the count of present
-    strains**. A converged run's terminal node carries a **green outline**
-    when it contains both the `000` wildtype and its `111` complement; a
-    non-converging run terminates in the **red-outlined `U`** node.
+    strains**. Each run terminates in a **special end node** drawn white
+    (like the `U` node): a converged run lands on the **complement-pair**
+    node it converged to (`000/111`, `001/110`, `010/101`, `011/100`),
+    while a non-converging run terminates in **`U`**. The `000/111` pair
+    (wildtype + all-ones) is outlined **green** and `U` is outlined
+    **red**; the other pairs get their own outline colors.
     """
     )
     return
 
 
 @app.cell
-def def_plot_path(FULL, ig, iplotx, node_text, np, plt, sns):
+def def_plot_path(
+    END_OUTLINE,
+    ig,
+    iplotx,
+    is_end_key,
+    node_count_label,
+    node_text,
+    plt,
+    sns,
+):
     def node_colormap(allsets, palette="husl"):
-        ordered = sorted(allsets, key=lambda s: (len(s), tuple(sorted(s))))
+        # Color only transient community nodes; special end nodes (pairs
+        # and U) are drawn white with a colored outline.
+        ordered = sorted(
+            (s for s in allsets if not is_end_key(s)),
+            key=lambda s: (len(s), tuple(sorted(s))),
+        )
         colors = sns.color_palette(palette, n_colors=max(3, len(ordered)))
         return {k: colors[i] for i, k in enumerate(ordered)}
 
@@ -442,21 +521,15 @@ def def_plot_path(FULL, ig, iplotx, node_text, np, plt, sns):
         vface, vedge, vlw, vlabel, vsize = [], [], [], [], []
         for j, k in enumerate(keys):
             last = j == n - 1
-            if k == "U":
+            if is_end_key(k):
                 vface.append("white")
-                vedge.append("red")
+                vedge.append(END_OUTLINE.get(k, "black"))
                 vlw.append(3.0)
-                vlabel.append("U")
             else:
                 vface.append(colormap[k])
-                has_axis = (0 in k) and (FULL in k)
-                if last and converged and has_axis:
-                    vedge.append("green")
-                    vlw.append(3.0)
-                else:
-                    vedge.append("black")
-                    vlw.append(1.0)
-                vlabel.append(str(len(k)))
+                vedge.append("black")
+                vlw.append(1.0)
+            vlabel.append(node_count_label(k))
             vsize.append(34.0 if last else 26.0)
         iplotx.network(
             g,
@@ -477,10 +550,15 @@ def def_plot_path(FULL, ig, iplotx, node_text, np, plt, sns):
 
     def path_legend(ax, colormap, allsets):
         ax.axis("off")
-        ordered = sorted(allsets, key=lambda s: (len(s), tuple(sorted(s))))
+        communities = sorted(
+            (s for s in allsets if not is_end_key(s)),
+            key=lambda s: (len(s), tuple(sorted(s))),
+        )
+        ends = sorted(s for s in allsets if is_end_key(s) and s != "U")
+        if "U" in allsets:
+            ends.append("U")
         handles, labels = [], []
-        for k in ordered:
-            outline = "green" if (0 in k and FULL in k) else "black"
+        for k in communities:
             handles.append(
                 plt.Line2D(
                     [0],
@@ -488,25 +566,27 @@ def def_plot_path(FULL, ig, iplotx, node_text, np, plt, sns):
                     marker="o",
                     color="w",
                     markerfacecolor=colormap[k],
-                    markeredgecolor=outline,
-                    markeredgewidth=1.6 if outline == "green" else 0.6,
+                    markeredgecolor="black",
+                    markeredgewidth=0.6,
                     markersize=9,
                 )
             )
             labels.append(node_text(k))
-        handles.append(
-            plt.Line2D(
-                [0],
-                [0],
-                marker="o",
-                color="w",
-                markerfacecolor="white",
-                markeredgecolor="red",
-                markeredgewidth=2.0,
-                markersize=9,
+        for k in ends:
+            outline = END_OUTLINE.get(k, "black")
+            handles.append(
+                plt.Line2D(
+                    [0],
+                    [0],
+                    marker="o",
+                    color="w",
+                    markerfacecolor="white",
+                    markeredgecolor=outline,
+                    markeredgewidth=2.0,
+                    markersize=9,
+                )
             )
-        )
-        labels.append("U  (failed to converge)")
+            labels.append(node_text(k))
         ax.legend(
             handles,
             labels,
@@ -514,7 +594,7 @@ def def_plot_path(FULL, ig, iplotx, node_text, np, plt, sns):
             fontsize=6.5,
             title="community (present strains)",
             title_fontsize=8,
-            ncol=1 if len(ordered) < 16 else 2,
+            ncol=1 if len(handles) < 16 else 2,
             frameon=False,
             labelspacing=0.3,
             handletextpad=0.4,
@@ -542,7 +622,7 @@ def def_plot_examples(
                 uid, main_df[main_df["replicate_uid"] == uid]
             )
             paths.append((uid, keys, conv))
-        allsets = {k for _u, ks, _c in paths for k in ks if k != "U"}
+        allsets = {k for _u, ks, _c in paths for k in ks}
         colormap = node_colormap(allsets)
         nrow = max(1, len(paths))
 
@@ -604,30 +684,35 @@ def delimit_combine(mo):
     For each mutation rate we overlay every replicate's transition
     sequence into one directed graph and tally:
 
-    - **node occurrences** --- per replicate, each community is counted
-      once as *transient* (appears mid-sequence) and/or once as
-      *end-state* (the replicate's terminal node). The `U` node is always
-      an end-state. A community can be transient in some replicates and an
-      end-state in others; it is classed as an **end-state node** if it is
-      terminal in at least one replicate.
+    - **node occurrences** --- transient community nodes are counted once
+      per replicate they appear in; the replicate's terminal **special end
+      node** (its complement pair, or `U`) is counted once. With the
+      converged outcome collapsed into a complement-pair end node, every
+      community node is transient and every end node is special, so the
+      two classes are disjoint.
     - **edge occurrences** --- how many replicate transitions follow each
-      `source -> target`.
+      `source -> target` (including the final transition into the end
+      node).
 
-    Nodes are **sized by occurrence**, with end-states scaled *among
-    end-states* and transient nodes scaled *among transient nodes* (so the
-    two roles are sized on separate scales; sizing counts occurrences, not
+    Nodes are **sized by occurrence**, with the special end nodes scaled
+    *among end nodes* and transient community nodes scaled *among
+    transient nodes* (separate scales; sizing counts occurrences, not
     durations). Edges are sized by transition frequency, and each edge is
     labelled with the **percentage (2 digits) of its source node's
-    outgoing transitions** that it accounts for. Sparse nodes/edges are
-    pruned for legibility via per-mutation-rate minimum-occurrence
-    thresholds (the `U` node and the `000` founder are always kept).
+    outgoing transitions** that it accounts for. Sparse transient
+    nodes/edges are pruned for legibility via per-mutation-rate
+    minimum-occurrence thresholds; the special end nodes and the `000`
+    founder are always kept. Pruning is then *repaired* so every kept node
+    retains a directed path to some end node: any node stranded by edge
+    pruning has the shortest higher-traffic path back to an end node added
+    from the full transition graph.
     """
     )
     return
 
 
 @app.cell
-def def_aggregate(defaultdict, path_with_end):
+def def_aggregate(defaultdict, is_end_key, path_with_end):
     def aggregate(reps_df):
         """Tally node/edge occurrences across a mutation rate's replicates."""
         uids = reps_df["replicate_uid"].unique()
@@ -661,20 +746,82 @@ def def_aggregate(defaultdict, path_with_end):
         }
 
     def build_graph(agg, min_count, min_edge):
-        occ = defaultdict(int)
-        for k, v in agg["end_count"].items():
-            occ[k] += v
-        for k, v in agg["trans_count"].items():
-            occ[k] += v
-        keep = {k for k, v in occ.items() if v >= min_count}
-        keep.add("U") if "U" in occ else None
-        keep.add(frozenset({0}))  # always keep founder
-        keep = {k for k in keep if k in occ}
+        # Transient community nodes (frozensets) are pruned by occurrence;
+        # special end nodes (complement pairs and U) are always kept, as is
+        # the 000 founder.
+        keep = {
+            k for k, v in agg["trans_count"].items() if v >= min_count
+        }
+        keep |= set(agg["end_count"].keys())
+        keep.add(frozenset({0}))
+        occ_nodes = set(agg["trans_count"]) | set(agg["end_count"])
+        keep = {k for k in keep if k in occ_nodes}
         kept_edges = {
             e: c
             for e, c in agg["edge_count"].items()
             if c >= min_edge and e[0] in keep and e[1] in keep
         }
+
+        # Repair reachability: every kept node must retain a directed path
+        # to some end node (complement pair or U). Pruning can strand a node
+        # by dropping all its outgoing edges, so for any stranded node we add
+        # back the shortest path to an end node from the full transition
+        # graph, preferring higher-traffic edges.
+        full_succ = defaultdict(list)
+        for (a, b), _c in sorted(
+            agg["edge_count"].items(), key=lambda kv: -kv[1]
+        ):
+            full_succ[a].append(b)
+
+        def reaches_end():
+            radj = defaultdict(list)
+            for a, b in kept_edges:
+                radj[b].append(a)
+            seen = {k for k in keep if is_end_key(k)}
+            stack = list(seen)
+            while stack:
+                x = stack.pop()
+                for p in radj[x]:
+                    if p in keep and p not in seen:
+                        seen.add(p)
+                        stack.append(p)
+            return seen
+
+        reach = reaches_end()
+        for n in list(keep):
+            if is_end_key(n) or n in reach:
+                continue
+            prev = {n: None}
+            queue = [n]
+            qi = 0
+            hit = None
+            while qi < len(queue):
+                x = queue[qi]
+                qi += 1
+                if x != n and (is_end_key(x) or x in reach):
+                    hit = x
+                    break
+                for b in full_succ.get(x, []):
+                    if b not in prev:
+                        prev[b] = x
+                        queue.append(b)
+            if hit is None:
+                continue
+            cur = hit
+            while prev[cur] is not None:
+                p = prev[cur]
+                kept_edges[(p, cur)] = agg["edge_count"][(p, cur)]
+                keep.add(p)
+                keep.add(cur)
+                cur = p
+            reach = reaches_end()
+
+        # Drop end nodes left with no incoming edge (an outcome whose only
+        # transitions were pruned); end nodes never have outgoing edges, so
+        # this strands nothing.
+        indeg = {b for (_a, b) in kept_edges}
+        keep = {k for k in keep if (not is_end_key(k)) or k in indeg}
+
         return keep, kept_edges
 
     return aggregate, build_graph
@@ -712,30 +859,37 @@ def delimit_plot(mo):
     ## 5. Per-Mutation-Rate Community Assembly Graphs
 
     One directed community assembly graph per mutation rate, rendered with
-    `iplotx` (matplotlib backend) via `teeplot`. Communities are laid out
-    left-to-right by the **number of present strains**, so assembly reads
-    as a progression from the `000` founder toward larger communities and
-    on to the end-states (`U` sits in its own rightmost column).
+    `iplotx` (matplotlib backend) via `teeplot`. Community nodes are laid
+    out left-to-right by the **number of present strains**, so assembly
+    reads as a progression from the `000` founder toward larger
+    communities; the special **complement-pair** and `U` end nodes share
+    the rightmost column.
 
-    Node fill encodes the community via the color key; the **number on
-    each node is the count of present strains**. End-state node sizes
-    reflect end-state occurrence; transient node sizes reflect transient
-    occurrence (separate scales). Edge width encodes transition frequency
-    and each edge label is the 2-digit percentage of its source's outgoing
-    transitions. The end-state containing both `000` and `111` is outlined
-    **green**; the non-convergence `U` end-state is outlined **red**.
+    Transient community fill encodes the community via the color key; the
+    **number on each node is the count of present strains** (the
+    complement-pair end nodes hold 2). Special end-node sizes reflect
+    end-node occurrence; transient node sizes reflect transient occurrence
+    (separate scales). Edge width encodes transition frequency and each
+    edge label is the 2-digit percentage of its source's outgoing
+    transitions. The `000/111` complement-pair end node is outlined
+    **green** and the non-convergence `U` end node **red**; the remaining
+    pairs carry their own outline colors.
+
+    Two versions of each graph are rendered and saved (tagged via
+    `teeplot_outattrs` `edge-labels=pct` vs `edge-labels=none`): one with
+    the edge percentage labels and one with bare arrows.
     """
     )
     return
 
 
 @app.cell
-def def_layout(defaultdict, np):
+def def_layout(defaultdict, is_end_key, np):
     def layout_layered(keep):
-        """x = community size; U gets its own rightmost column."""
+        """x = community size; special end nodes share the rightmost column."""
         cols = defaultdict(list)
         for k in keep:
-            x = None if k == "U" else len(k)
+            x = None if is_end_key(k) else len(k)
             cols[x].append(k)
         coords = {}
         sizes = sorted(x for x in cols if x is not None)
@@ -753,7 +907,15 @@ def def_layout(defaultdict, np):
             for k, y in zip(nodes, ys):
                 coords[k] = (float(x), float(y) * 1.6)
         if None in cols:
-            coords["U"] = (float(maxx + 1), 0.0)
+            ends = sorted(cols[None], key=lambda k: (k == "U", k))
+            n = len(ends)
+            ys = (
+                np.linspace(-(n - 1) / 2.0, (n - 1) / 2.0, n)
+                if n > 1
+                else [0.0]
+            )
+            for k, y in zip(ends, ys):
+                coords[k] = (float(maxx + 1), float(y) * 1.8)
         return coords
 
     return (layout_layered,)
@@ -761,35 +923,36 @@ def def_layout(defaultdict, np):
 
 @app.cell
 def def_plot_mu(
-    FULL,
+    END_OUTLINE,
     ig,
     iplotx,
+    is_end_key,
     layout_layered,
+    node_count_label,
     node_text,
     np,
     plt,
     sns,
 ):
-    def plot_mu(mu, bundle, ax, legend_ax, palette="husl"):
+    def plot_mu(mu, bundle, ax, legend_ax, palette="husl", edge_labels=True):
         agg = bundle["agg"]
         keep = bundle["keep"]
         kept_edges = bundle["edges"]
         ec = agg["end_count"]
         tc = agg["trans_count"]
 
-        nodes = sorted(
-            keep,
-            key=lambda k: (
-                k == "U",
-                len(k) if k != "U" else 99,
-                tuple(sorted(k)) if k != "U" else (),
-            ),
-        )
+        def _sort_key(k):
+            if is_end_key(k):
+                return (1, 99, (), k)
+            return (0, len(k), tuple(sorted(k)), "")
+
+        nodes = sorted(keep, key=_sort_key)
         idx = {k: i for i, k in enumerate(nodes)}
         coords = layout_layered(keep)
 
-        # end-state nodes: terminal in >=1 replicate (U always end-state).
-        end_nodes = {k for k in nodes if k == "U" or ec.get(k, 0) > 0}
+        # Special end nodes (pairs and U) vs transient community nodes are
+        # disjoint classes, sized on separate scales.
+        end_nodes = {k for k in nodes if is_end_key(k)}
         max_end = max([ec.get(k, 0) for k in end_nodes] + [1])
         max_tr = max(
             [tc.get(k, 0) for k in nodes if k not in end_nodes] + [1]
@@ -807,40 +970,32 @@ def def_plot_mu(
         g.add_edges(elist)
 
         colors = sns.color_palette(
-            palette, n_colors=max(3, len([k for k in nodes if k != "U"]))
+            palette,
+            n_colors=max(3, len([k for k in nodes if not is_end_key(k)])),
         )
         vsize, vface, vedge, vlw, vlabel = [], [], [], [], []
         colormap = {}
         ci = 0
         for k in nodes:
-            if k == "U":
-                vsize.append(
-                    16.0 + 34.0 * np.sqrt(ec.get("U", 0) / max_end)
-                )
-                vface.append("white")
-                vedge.append("red")
-                vlw.append(3.0)
-                vlabel.append("U")
-                continue
-            colormap[k] = colors[ci]
-            ci += 1
-            if k in end_nodes:
+            if is_end_key(k):
                 vsize.append(16.0 + 34.0 * np.sqrt(ec.get(k, 0) / max_end))
-                has_axis = (0 in k) and (FULL in k)
-                vedge.append("green" if has_axis else "black")
-                vlw.append(3.5 if has_axis else 1.0)
+                vface.append("white")
+                vedge.append(END_OUTLINE.get(k, "black"))
+                vlw.append(3.0)
             else:
+                colormap[k] = colors[ci]
+                ci += 1
                 vsize.append(7.0 + 20.0 * np.sqrt(tc.get(k, 0) / max_tr))
+                vface.append(colormap[k])
                 vedge.append("black")
                 vlw.append(1.0)
-            vface.append(colormap[k])
-            vlabel.append(str(len(k)))
+            vlabel.append(node_count_label(k))
 
         iplotx.network(
             g,
             layout=[coords[k] for k in nodes],
             vertex_labels=vlabel,
-            edge_labels=elabel,
+            edge_labels=(elabel if edge_labels else None),
             ax=ax,
             vertex_facecolor=vface,
             vertex_edgecolor=vedge,
@@ -863,7 +1018,7 @@ def def_plot_mu(
         legend_ax.axis("off")
         handles, labels = [], []
         for k in nodes:
-            if k == "U":
+            if is_end_key(k):
                 handles.append(
                     plt.Line2D(
                         [0],
@@ -871,18 +1026,13 @@ def def_plot_mu(
                         marker="o",
                         color="w",
                         markerfacecolor="white",
-                        markeredgecolor="red",
+                        markeredgecolor=END_OUTLINE.get(k, "black"),
                         markeredgewidth=2.0,
                         markersize=9,
                     )
                 )
-                labels.append("U  (failed to converge)")
+                labels.append(node_text(k))
                 continue
-            outline = (
-                "green"
-                if (0 in k and FULL in k and k in end_nodes)
-                else "black"
-            )
             handles.append(
                 plt.Line2D(
                     [0],
@@ -890,8 +1040,8 @@ def def_plot_mu(
                     marker="o",
                     color="w",
                     markerfacecolor=colormap[k],
-                    markeredgecolor=outline,
-                    markeredgewidth=1.8 if outline == "green" else 0.6,
+                    markeredgecolor="black",
+                    markeredgewidth=0.6,
                     markersize=9,
                 )
             )
@@ -915,6 +1065,8 @@ def def_plot_mu(
 
 @app.cell
 def render_graphs(aggregates, mutation_rates, pathlib, plot_mu, plt, tp):
+    # Render two versions per mutation rate: one with the edge percentage
+    # labels and one without (arrows only). teeplot_outattrs tag them apart.
     for _mu in mutation_rates:
         _bundle = aggregates[_mu]
         _n_nodes = len(_bundle["keep"])
@@ -926,18 +1078,20 @@ def render_graphs(aggregates, mutation_rates, pathlib, plot_mu, plt, tp):
             )
             return fig, (ax, lax)
 
-        with tp.teed(
-            _factory,
-            figsize=(14 if _wide else 13, 8.5 if _wide else 7.5),
-            teeplot_outattrs={
-                "a": "community-assembly-graph",
-                "mutation-rate": f"{_mu:.0e}",
-            },
-            teeplot_outexclude="viz",
-            teeplot_show=True,
-            teeplot_subdir=pathlib.Path(__file__).stem,
-        ) as (fig, (ax, lax)):
-            plot_mu(_mu, _bundle, ax, lax)
+        for _edge_labels, _tag in [(True, "pct"), (False, "none")]:
+            with tp.teed(
+                _factory,
+                figsize=(14 if _wide else 13, 8.5 if _wide else 7.5),
+                teeplot_outattrs={
+                    "a": "community-assembly-graph",
+                    "mutation-rate": f"{_mu:.0e}",
+                    "edge-labels": _tag,
+                },
+                teeplot_outexclude="viz",
+                teeplot_show=True,
+                teeplot_subdir=pathlib.Path(__file__).stem,
+            ) as (fig, (ax, lax)):
+                plot_mu(_mu, _bundle, ax, lax, edge_labels=_edge_labels)
     return
 
 
