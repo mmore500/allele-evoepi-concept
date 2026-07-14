@@ -74,11 +74,19 @@ def configure_args(mo):
     # the unconfigured run still exercises the seed / observe / save path
     # rather than the empty ARRAY_ID=0 community.
     _args = mo.cli_args()
-    ARRAY_ID = int(_args.get("array-id") or 3)
-    SEED = int(_args.get("seed") or 1)
-    POP_SIZE = int(_args.get("pop-size") or 100_000)
-    N_STEPS = int(_args.get("n-steps") or 1_200)
-    SEED_COUNT_PER_STRAIN = int(_args.get("seed-count-per-strain") or 10)
+
+    def _arg_int(name, default):
+        # Explicit None check, NOT `value or default`: array_id == 0 (the
+        # empty community) is a valid, load-bearing value that the truthy
+        # `or` idiom would silently rewrite to the default.
+        value = _args.get(name)
+        return default if value is None else int(value)
+
+    ARRAY_ID = _arg_int("array-id", 3)
+    SEED = _arg_int("seed", 1)
+    POP_SIZE = _arg_int("pop-size", 100_000)
+    N_STEPS = _arg_int("n-steps", 1_200)
+    SEED_COUNT_PER_STRAIN = _arg_int("seed-count-per-strain", 10)
     ENGINE = str(_args.get("engine") or "numpy").lower()
     if ENGINE != "numpy":
         raise ValueError(f"engine must be 'numpy', got {ENGINE!r}")
@@ -134,6 +142,27 @@ def delimit_simulation(mo):
     call to `update_simulation`. A seeded strain is thus always observed
     at update `0`, keeping the `-1` "never added" sentinel disjoint from
     every added strain's last-observed update.
+
+    This is written as the `strainlast` parquet (8 rows per replicate).
+
+    ### Susceptibility snapshots (`susc` parquet)
+
+    A second output records, **every `SUSC_WINDOW` (1000) updates**, a
+    snapshot of the population's average susceptibility to each of the
+    eight strains, **time-averaged over the trailing `SUSC_WINDOW`
+    updates**. A host's susceptibility to a strain is the
+    infection-probability factor from the shared model
+    (`calc_infection_probabilities`): the product over sites of
+    `1 - IMMUNE_STRENGTH * immunity` for the allele that strain carries
+    at each site. Following the founder notebook's `avg_susc` convention,
+    currently-infected hosts (which cannot be re-infected) contribute
+    zero, and the mean is taken over the full `POP_SIZE`. Each update's
+    per-strain population mean is accumulated, and at every multiple of
+    `SUSC_WINDOW` the window mean is emitted and the accumulator reset ---
+    so each snapshot is the average over updates `(t - SUSC_WINDOW, t]`.
+    This yields **8 rows (one per strain) per 1000-update window**, i.e.
+    `8 * (N_STEPS // SUSC_WINDOW)` rows per replicate (any trailing
+    updates past the last whole window are not emitted).
 
     Every output row is stamped with the simulation parameters as
     constant-valued columns, the `array_id`, and a `replicate_uid`
@@ -223,6 +252,40 @@ def run_replicate(
             for g in present.tolist():
                 last_observed[int(g)] = update
 
+    # Windowed susceptibility snapshots. strain_bits_mat[g, s] is bit s of
+    # genome g; it drives a vectorized per-strain susceptibility that is
+    # accumulated every update and averaged over each SUSC_WINDOW-update
+    # window (see mean_susceptibility_per_strain and the docstring above).
+    SUSC_WINDOW = 1000
+    strain_bits_mat = (
+        xp.arange(n_strains)[:, None] >> xp.arange(N_SITES)[None, :]
+    ) & 1
+
+    def mean_susceptibility_per_strain():
+        # Per-host susceptibility to each strain g == the product over
+        # sites of (1 - IMMUNE_STRENGTH * immunity) for the allele g
+        # carries at that site (calc_infection_probabilities, vectorized
+        # over all 8 strains at once). Currently-infected hosts contribute
+        # 0 and the mean is over the full POP_SIZE (founder avg_susc
+        # convention). Returns a length-n_strains vector.
+        susc = (
+            xp.float32(1.0) - xp.float32(IMMUNE_STRENGTH) * host_immunities
+        ).reshape(POP_SIZE, N_SITES, 2)
+        per = xp.ones((POP_SIZE, n_strains), dtype=xp.float32)
+        for s in range(N_SITES):
+            bit = strain_bits_mat[:, s]
+            per *= xp.where(
+                bit[None, :] == 0,
+                susc[:, s, 0][:, None],
+                susc[:, s, 1][:, None],
+            )
+        per *= (host_statuses == 0)[:, None]
+        return per.mean(axis=0, dtype=xp.float64)
+
+    susc_sum = xp.zeros(n_strains, dtype=xp.float64)
+    susc_count = 0
+    susc_rows = []
+
     observe(0)  # post-seeding snapshot (community as seeded)
     for t in range(1, N_STEPS + 1):
         host_statuses, pathogen_genomes, host_immunities = update_simulation(
@@ -246,6 +309,26 @@ def run_replicate(
             xp=xp,
         )
         observe(t)
+
+        # Accumulate this update's per-strain susceptibility; at each whole
+        # SUSC_WINDOW boundary emit the window mean (8 rows) and reset.
+        susc_sum += mean_susceptibility_per_strain()
+        susc_count += 1
+        if t % SUSC_WINDOW == 0:
+            window_mean = susc_sum / susc_count
+            for g in range(n_strains):
+                susc_rows.append(
+                    {
+                        "array_id": ARRAY_ID,
+                        "strain": g,
+                        "strain_bits": format(g, f"0{N_SITES}b"),
+                        "window_end_update": t,
+                        "window_size": susc_count,
+                        "mean_susceptibility": float(window_mean[g]),
+                    }
+                )
+            susc_sum = xp.zeros(n_strains, dtype=xp.float64)
+            susc_count = 0
 
     # One row per strain (genome 0..7). strain_bits is the plain
     # N_SITES-bit binary label of the genome integer (strain 0 -> "000",
@@ -285,6 +368,40 @@ def run_replicate(
     }
     strainlast_df = strainlast_df.assign(**params)
 
+    # Windowed susceptibility snapshots: 8 rows (one per strain) per whole
+    # SUSC_WINDOW-update window. Explicit columns keep the schema stable
+    # even when there is no whole window (N_STEPS < SUSC_WINDOW).
+    susc_df = (
+        pd.DataFrame(
+            susc_rows,
+            columns=[
+                "array_id",
+                "strain",
+                "strain_bits",
+                "window_end_update",
+                "window_size",
+                "mean_susceptibility",
+            ],
+        )
+        .astype(
+            {
+                # Pin dtypes so the parquet schema is identical whether or
+                # not any whole window was emitted --- an empty frame would
+                # otherwise default its columns to object/null and break the
+                # cross-replicate parquet concatenation. strain_bits uses
+                # the pandas "string" dtype so it is written as parquet
+                # `string` (not `null`) even when the frame has no rows.
+                "array_id": "int64",
+                "strain": "int64",
+                "strain_bits": "string",
+                "window_end_update": "int64",
+                "window_size": "int64",
+                "mean_susceptibility": "float64",
+            }
+        )
+        .assign(**params)
+    )
+
     nbname = pathlib.Path(__file__).stem
     out_dir = pathlib.Path("outdata") / nbname
 
@@ -296,9 +413,11 @@ def run_replicate(
         print(f"  wrote {kind} parquet ({len(df)} rows): {rep_path}")
 
     _save("strainlast", strainlast_df)
+    _save("susc", susc_df)
 
     print(strainlast_df.to_string())
-    return (strainlast_df,)
+    print(susc_df.head(16).to_string())
+    return strainlast_df, susc_df
 
 
 if __name__ == "__main__":

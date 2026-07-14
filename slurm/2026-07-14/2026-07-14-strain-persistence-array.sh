@@ -363,11 +363,14 @@ echo "   - join per-replicate parquets across all communities"
 # Each per-replicate parquet already carries the replicate_uid, the
 # array_id, and the condition columns (n_sites, pop_size, n_steps, seed,
 # engine, mutation_rate, ...) stamped by the notebook's run cell, so a
-# straight concatenation yields a self-describing collated frame. The
-# strainlast parquet is the sole output --- 8 rows per replicate (one per
-# strain) recording each strain's last-observed update. 256 communities
-# x 8 strains = 2048 rows in the joined frame.
-for kind in strainlast; do
+# straight concatenation yields a self-describing collated frame.
+#   - strainlast: 8 rows per replicate (one per strain) recording each
+#     strain's last-observed update; 256 communities x 8 strains = 2048
+#     rows in the joined frame.
+#   - susc: 8 rows per strain per 1000-update window --- a trailing
+#     1000-update average of each strain's population-mean susceptibility,
+#     snapshotted every 1000 updates.
+for kind in strainlast susc; do
     echo "    joining \${kind} ..."
     out_path="${BATCHDIR_JOBRESULT}/a=\${kind}+date=${JOBDATE}+job=${JOBNAME}+ext=.pqt"
     # __<arrayid>/outdata/... --- one output dir per array task (globstar
