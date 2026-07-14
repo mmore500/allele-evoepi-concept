@@ -351,10 +351,48 @@ def def_pairs(N_SITES):
 
 
 @app.cell
+def def_flow(defaultdict):
+    def assembly_flow(nodes, edges, pair_edges):
+        """Even-split assembly flow (visitation probability) per node.
+
+        A uniform assembly walk starts at the 000 founder with unit weight;
+        at every juncture the node's weight is split *evenly* among its
+        outgoing edges (invasions, or the convergence into a complement-pair
+        end node). A node's flow is the total weight reaching it --- the
+        probability the walk passes through it --- and the flow arriving at
+        the terminal / pair end nodes partitions the unit weight across
+        outcomes. Every invasion lengthens the community by one strain, so
+        processing community nodes in order of size is a valid topological
+        order (parents, being smaller, are always finished first).
+        """
+        founder = frozenset({0})
+        succ = defaultdict(list)
+        for a, b in edges:
+            succ[frozenset(a)].append(frozenset(b))
+        for a, pk in pair_edges:
+            succ[frozenset(a)].append(pk)
+
+        flow = {n: 0.0 for n in nodes}
+        for _a, pk in pair_edges:
+            flow[pk] = 0.0
+        flow[founder] = 1.0
+        for node in sorted(nodes, key=len):  # communities, small -> large
+            outs = succ.get(node, [])
+            if outs:
+                share = flow[node] / len(outs)
+                for target in outs:
+                    flow[target] += share
+        return flow
+
+    return (assembly_flow,)
+
+
+@app.cell
 def build_graphs(
     SAMPLE_INDICES,
     SUSC_THRESHOLD,
     WINDOW_ENDS,
+    assembly_flow,
     build_assembly_graph,
     community_pairs,
 ):
@@ -378,6 +416,7 @@ def build_graphs(
             for _pk in community_pairs(_n):
                 _pair_nodes.add(_pk)
                 _pair_edges.append((tuple(sorted(_n)), _pk))
+        _flow = assembly_flow(_nodes, _edges, _pair_edges)
         graphs[_i] = {
             "window_end": _w,
             "nodes": _nodes,
@@ -385,12 +424,16 @@ def build_graphs(
             "terminal": _terminal,
             "pair_nodes": _pair_nodes,
             "pair_edges": _pair_edges,
+            "flow": _flow,
         }
+        _pair_flow = {pk: _flow[pk] for pk in sorted(_pair_nodes)}
         print(
             f"sample {_i} (updates {_w - 1000 + 1}..{_w}): "
             f"{len(_nodes)} communities, {len(_edges)} invasions, "
             f"{len(_terminal)} terminal, "
-            f"{len(_pair_nodes)} complement-pair end states",
+            f"{len(_pair_nodes)} complement-pair end states; "
+            f"end-state flow: "
+            + ", ".join(f"{pk}={v:.2f}" for pk, v in _pair_flow.items()),
         )
     return (graphs,)
 
@@ -427,6 +470,13 @@ def delimit_plot(mo):
     strains**, so assembly reads as growth from the `000` founder. Node
     fill encodes the community via the color key; the number on each node is
     the count of resident strains. The `000` founder is outlined **green**.
+
+    **Node size** encodes the **even-split assembly flow**: a uniform
+    assembly walk starts at the founder with unit weight and splits its
+    weight *evenly* among the available invasions at each juncture, so a
+    node's area is proportional to the probability the walk passes through
+    it. The flow arriving at the terminal and complement-pair end nodes
+    partitions the unit weight across outcomes (printed above).
 
     Each **complement-pair end state** is drawn as a **hollow circle with a
     color-coded outline** (`000/111` green, the other pairs their own colors)
@@ -492,7 +542,15 @@ def def_plot(
         terminal = bundle["terminal"]
         pair_nodes = bundle["pair_nodes"]
         pair_edges = bundle["pair_edges"]
+        flow = bundle["flow"]
         founder = frozenset({0})
+
+        # Node size encodes the even-split assembly flow (visitation
+        # probability): area proportional to flow, so radius ~ sqrt(flow).
+        max_flow = max(flow.values()) if flow else 1.0
+
+        def vsize(k):
+            return 12.0 + 34.0 * np.sqrt(flow.get(k, 0.0) / max_flow)
 
         # Terminal communities that resolve to a complement pair (vs. an
         # unresolved "U"-like endpoint that harbours no pair). pair_edges
@@ -541,8 +599,9 @@ def def_plot(
             elabel.append("")
         g.add_edges(elist)
 
-        vface, vedge, vlw, vlabel = [], [], [], []
+        vsizes, vface, vedge, vlw, vlabel = [], [], [], [], []
         for k in nodes:
+            vsizes.append(vsize(k))
             if isinstance(k, str):  # complement-pair end node: hollow + coded
                 vface.append("white")
                 vedge.append(END_OUTLINE.get(k, "black"))
@@ -569,7 +628,7 @@ def def_plot(
             ax=ax,
             vertex_facecolor=vface,
             vertex_edgecolor=vedge,
-            vertex_size=32.0,
+            vertex_size=vsizes,
             vertex_linewidth=vlw,
             edge_linewidth=ewidth,
             edge_color="0.55",
