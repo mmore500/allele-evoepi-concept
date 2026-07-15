@@ -225,6 +225,14 @@ def delimit_build(mo):
     invasion step until no new community appears, yielding the directed
     assembly graph for that susceptibility sample. Communities with no
     admissible invader are **terminal** (uninvadable) assembly endpoints.
+
+    **Complement-pair end states.** A terminal community that harbours a
+    strain and its bitwise complement (`a` and `a ^ 111`) is a *converged*
+    end state --- the complement pair partitions the immune landscape and
+    stably coexists. Each such terminal converges to a **complement-pair end
+    node** (`000/111`, `001/110`, `010/101`, `011/100`); branches ending on
+    the same pair share that node. Complementation commutes with the
+    arrival-order relabeling, so the pairs are canonical too.
     """
     )
     return
@@ -301,8 +309,92 @@ def def_graph(N_SITES, deque, itertools, susc_map):
 
 
 @app.cell
+def def_pairs(N_SITES):
+    FULL = (1 << N_SITES) - 1  # all-ones strain (complement of the founder)
+
+    def binstr(g):
+        return format(g, f"0{N_SITES}b")
+
+    def pair_key(a, b):
+        """Canonical label for a complement pair, e.g. 000/111."""
+        lo, hi = sorted((a, b))
+        return f"{binstr(lo)}/{binstr(hi)}"
+
+    def community_pairs(community):
+        """Complement pairs {a, a ^ FULL} with both members present.
+
+        A terminal community harbouring such a pair is a *converged*
+        assembly end state: a strain and its bitwise complement stably
+        coexisting (they partition the immune landscape). Complementation
+        commutes with the arrival-order relabeling, so canonical communities
+        keep canonical pairs.
+        """
+        return sorted(
+            pair_key(a, a ^ FULL)
+            for a in community
+            if (a ^ FULL) in community and a <= (a ^ FULL)
+        )
+
+    # Outline colors for the complement-pair end states, mirroring the
+    # mutation-sweep community-assembly notebook: 000/111 (founder + all-ones)
+    # green, the remaining pairs each their own color.
+    PAIR_KEYS = [
+        pair_key(s, s ^ FULL) for s in range(FULL + 1) if s <= s ^ FULL
+    ]
+    _pair_palette = ["green", "#1f77b4", "#ff7f0e", "#9467bd", "#8c564b"]
+    END_OUTLINE = {
+        pk: _pair_palette[i % len(_pair_palette)]
+        for i, pk in enumerate(PAIR_KEYS)
+    }
+    END_OUTLINE["000/111"] = "green"
+    return END_OUTLINE, community_pairs
+
+
+@app.cell
+def def_flow(defaultdict):
+    def assembly_flow(nodes, edges, pair_edges):
+        """Even-split assembly flow (visitation probability) per node.
+
+        A uniform assembly walk starts at the 000 founder with unit weight;
+        at every juncture the node's weight is split *evenly* among its
+        outgoing edges (invasions, or the convergence into a complement-pair
+        end node). A node's flow is the total weight reaching it --- the
+        probability the walk passes through it --- and the flow arriving at
+        the terminal / pair end nodes partitions the unit weight across
+        outcomes. Every invasion lengthens the community by one strain, so
+        processing community nodes in order of size is a valid topological
+        order (parents, being smaller, are always finished first).
+        """
+        founder = frozenset({0})
+        succ = defaultdict(list)
+        for a, b in edges:
+            succ[frozenset(a)].append(frozenset(b))
+        for a, pk in pair_edges:
+            succ[frozenset(a)].append(pk)
+
+        flow = {n: 0.0 for n in nodes}
+        for _a, pk in pair_edges:
+            flow[pk] = 0.0
+        flow[founder] = 1.0
+        for node in sorted(nodes, key=len):  # communities, small -> large
+            outs = succ.get(node, [])
+            if outs:
+                share = flow[node] / len(outs)
+                for target in outs:
+                    flow[target] += share
+        return flow
+
+    return (assembly_flow,)
+
+
+@app.cell
 def build_graphs(
-    SAMPLE_INDICES, SUSC_THRESHOLD, WINDOW_ENDS, build_assembly_graph
+    SAMPLE_INDICES,
+    SUSC_THRESHOLD,
+    WINDOW_ENDS,
+    assembly_flow,
+    build_assembly_graph,
+    community_pairs,
 ):
     # One assembly graph per requested susceptibility sample (1-based index
     # into WINDOW_ENDS -> the window's end update).
@@ -315,16 +407,33 @@ def build_graphs(
         _nodes, _edges = build_assembly_graph(_w, SUSC_THRESHOLD)
         _srcs = {e[0] for e in _edges}
         _terminal = {n for n in _nodes if tuple(sorted(n)) not in _srcs}
+        # Complement-pair end states: each terminal community that harbours a
+        # complement pair converges to a hollow, color-coded pair end node;
+        # branches converging to the same pair share that node.
+        _pair_nodes = set()
+        _pair_edges = []
+        for _n in _terminal:
+            for _pk in community_pairs(_n):
+                _pair_nodes.add(_pk)
+                _pair_edges.append((tuple(sorted(_n)), _pk))
+        _flow = assembly_flow(_nodes, _edges, _pair_edges)
         graphs[_i] = {
             "window_end": _w,
             "nodes": _nodes,
             "edges": _edges,
             "terminal": _terminal,
+            "pair_nodes": _pair_nodes,
+            "pair_edges": _pair_edges,
+            "flow": _flow,
         }
+        _pair_flow = {pk: _flow[pk] for pk in sorted(_pair_nodes)}
         print(
             f"sample {_i} (updates {_w - 1000 + 1}..{_w}): "
             f"{len(_nodes)} communities, {len(_edges)} invasions, "
-            f"{len(_terminal)} terminal",
+            f"{len(_terminal)} terminal, "
+            f"{len(_pair_nodes)} complement-pair end states; "
+            f"end-state flow: "
+            + ", ".join(f"{pk}={v:.2f}" for pk, v in _pair_flow.items()),
         )
     return (graphs,)
 
@@ -360,11 +469,24 @@ def delimit_plot(mo):
     Communities are laid out left-to-right by the **number of resident
     strains**, so assembly reads as growth from the `000` founder. Node
     fill encodes the community via the color key; the number on each node is
-    the count of resident strains. **Terminal (uninvadable) communities** ---
-    assembly endpoints with no admissible invader --- are outlined **red**;
-    the `000` founder is outlined **green**. Each edge is an invasion,
-    optionally labelled with the arrival-ordered invading strain and its
-    measured susceptibility. Two versions are saved per sample (tagged
+    the count of resident strains. The `000` founder is outlined **green**.
+
+    **Node size** encodes the **even-split assembly flow**: a uniform
+    assembly walk starts at the founder with unit weight and splits its
+    weight *evenly* among the available invasions at each juncture, so a
+    node's area is proportional to the probability the walk passes through
+    it. The flow arriving at the terminal and complement-pair end nodes
+    partitions the unit weight across outcomes (printed above).
+
+    Each **complement-pair end state** is drawn as a **hollow circle with a
+    color-coded outline** (`000/111` green, the other pairs their own colors)
+    sharing the rightmost column; a terminal community converges into the
+    hollow pair node it harbours. A terminal community that harbours *no*
+    complement pair (an unresolved endpoint) is instead outlined **red**.
+
+    Each invasion edge is optionally labelled with the arrival-ordered
+    invading strain and its measured susceptibility (convergence edges into
+    the pair nodes are unlabelled). Two versions are saved per sample (tagged
     `edge-labels=strain-susc` vs `edge-labels=none`).
     """
     )
@@ -396,7 +518,9 @@ def def_layout(defaultdict):
 
 @app.cell
 def def_plot(
+    END_OUTLINE,
     N_SITES,
+    defaultdict,
     ig,
     iplotx,
     layout_layered,
@@ -407,18 +531,59 @@ def def_plot(
     def _binset(community):
         return ", ".join(format(g, f"0{N_SITES}b") for g in sorted(community))
 
+    def _nid(k):
+        # Node id: sorted-genome tuple for a community, the string for a
+        # complement-pair end node.
+        return tuple(sorted(k)) if isinstance(k, frozenset) else k
+
     def plot_graph(bundle, ax, legend_ax, palette="husl", edge_labels=True):
-        nodes_set = bundle["nodes"]
+        comm_set = bundle["nodes"]
         edges = bundle["edges"]
         terminal = bundle["terminal"]
+        pair_nodes = bundle["pair_nodes"]
+        pair_edges = bundle["pair_edges"]
+        flow = bundle["flow"]
         founder = frozenset({0})
 
-        nodes = sorted(nodes_set, key=lambda k: (len(k), tuple(sorted(k))))
-        idx = {tuple(sorted(k)): i for i, k in enumerate(nodes)}
-        coords = layout_layered(nodes_set, np)
+        # Node size encodes the even-split assembly flow (visitation
+        # probability): area proportional to flow, so radius ~ sqrt(flow).
+        max_flow = max(flow.values()) if flow else 1.0
 
-        colors = sns.color_palette(palette, n_colors=max(3, len(nodes)))
-        colormap = {k: colors[i] for i, k in enumerate(nodes)}
+        def vsize(k):
+            return 12.0 + 34.0 * np.sqrt(flow.get(k, 0.0) / max_flow)
+
+        # Terminal communities that resolve to a complement pair (vs. an
+        # unresolved "U"-like endpoint that harbours no pair). pair_edges
+        # store sorted-tuple sources, so rebuild as frozensets to match the
+        # community node keys.
+        resolved = {frozenset(a) for a, _pk in pair_edges}
+
+        communities = sorted(
+            comm_set, key=lambda k: (len(k), tuple(sorted(k)))
+        )
+
+        # Layout: communities by size; complement-pair end nodes share the
+        # rightmost column (like the reference notebook's end nodes), ordered
+        # by the mean height of their source communities to limit crossings.
+        coords = layout_layered(comm_set, np)
+        maxsize = max((len(k) for k in comm_set), default=1)
+        src_y = defaultdict(list)
+        for a, pk in pair_edges:
+            src_y[pk].append(coords[frozenset(a)][1])
+        pairs = sorted(
+            pair_nodes,
+            key=lambda pk: sum(src_y[pk]) / max(len(src_y[pk]), 1),
+        )
+        m = len(pairs)
+        ys = np.linspace(-(m - 1) / 2.0, (m - 1) / 2.0, m) if m > 1 else [0.0]
+        for pk, y in zip(pairs, ys):
+            coords[pk] = (float(maxsize + 1), float(y) * 1.8)
+
+        nodes = communities + pairs  # community nodes first, pair nodes last
+        idx = {_nid(k): i for i, k in enumerate(nodes)}
+
+        colors = sns.color_palette(palette, n_colors=max(3, len(communities)))
+        colormap = {k: colors[i] for i, k in enumerate(communities)}
 
         g = ig.Graph(directed=True)
         g.add_vertices(len(nodes))
@@ -428,21 +593,32 @@ def def_plot(
             elist.append((idx[a], idx[b]))
             ewidth.append(1.0 + 3.5 * (susc / max_susc))
             elabel.append(f"{format(x, f'0{N_SITES}b')}\n{susc:.2f}")
+        for a, pk in pair_edges:  # convergence into the pair end node
+            elist.append((idx[a], idx[pk]))
+            ewidth.append(2.0)
+            elabel.append("")
         g.add_edges(elist)
 
-        vface, vedge, vlw, vlabel = [], [], [], []
+        vsizes, vface, vedge, vlw, vlabel = [], [], [], [], []
         for k in nodes:
-            vface.append(colormap[k])
-            if k == founder:
-                vedge.append("green")
+            vsizes.append(vsize(k))
+            if isinstance(k, str):  # complement-pair end node: hollow + coded
+                vface.append("white")
+                vedge.append(END_OUTLINE.get(k, "black"))
                 vlw.append(3.0)
-            elif k in terminal:
-                vedge.append("red")
-                vlw.append(3.0)
+                vlabel.append("2")
             else:
-                vedge.append("black")
-                vlw.append(1.0)
-            vlabel.append(str(len(k)))
+                vface.append(colormap[k])
+                if k == founder:
+                    vedge.append("green")
+                    vlw.append(3.0)
+                elif k in terminal and k not in resolved:
+                    vedge.append("red")  # unresolved endpoint (no pair)
+                    vlw.append(3.0)
+                else:
+                    vedge.append("black")
+                    vlw.append(1.0)
+                vlabel.append(str(len(k)))
 
         iplotx.network(
             g,
@@ -452,7 +628,7 @@ def def_plot(
             ax=ax,
             vertex_facecolor=vface,
             vertex_edgecolor=vedge,
-            vertex_size=32.0,
+            vertex_size=vsizes,
             vertex_linewidth=vlw,
             edge_linewidth=ewidth,
             edge_color="0.55",
@@ -464,15 +640,17 @@ def def_plot(
         )
         ax.margins(0.12)
 
-        # color-coded key: community (present strains); founder/terminal noted
+        # color-coded key: communities (filled) then complement-pair end
+        # states (hollow, color-coded outline).
         legend_ax.axis("off")
         handles, labels = [], []
-        for k in nodes:
-            outline = (
-                "green"
-                if k == founder
-                else ("red" if k in terminal else "black")
-            )
+        for k in communities:
+            if k == founder:
+                outline, mew, suffix = "green", 1.8, "  (founder)"
+            elif k in terminal and k not in resolved:
+                outline, mew, suffix = "red", 1.8, "  (terminal, no pair)"
+            else:
+                outline, mew, suffix = "black", 0.6, ""
             handles.append(
                 plt.Line2D(
                     [0],
@@ -481,16 +659,25 @@ def def_plot(
                     color="w",
                     markerfacecolor=colormap[k],
                     markeredgecolor=outline,
-                    markeredgewidth=1.8 if outline != "black" else 0.6,
+                    markeredgewidth=mew,
                     markersize=9,
                 )
             )
-            suffix = (
-                "  (founder)"
-                if k == founder
-                else ("  (terminal)" if k in terminal else "")
-            )
             labels.append(f"{{{_binset(k)}}}{suffix}")
+        for pk in pairs:
+            handles.append(
+                plt.Line2D(
+                    [0],
+                    [0],
+                    marker="o",
+                    color="w",
+                    markerfacecolor="white",
+                    markeredgecolor=END_OUTLINE.get(pk, "black"),
+                    markeredgewidth=2.0,
+                    markersize=9,
+                )
+            )
+            labels.append(f"{pk}  (complement-pair end state)")
         legend_ax.legend(
             handles,
             labels,
@@ -498,7 +685,7 @@ def def_plot(
             fontsize=6.5,
             title="community (resident strains)",
             title_fontsize=8,
-            ncol=1 if len(nodes) <= 16 else 2,
+            ncol=1 if len(handles) <= 16 else 2,
             frameon=False,
             handletextpad=0.4,
             labelspacing=0.3,
