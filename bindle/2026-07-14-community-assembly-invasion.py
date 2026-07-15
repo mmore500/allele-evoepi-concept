@@ -264,12 +264,12 @@ def def_graph(N_SITES, deque, itertools, susc_map):
     def _permute_genome(g, perm):
         return sum((1 << perm[i]) for i in range(N_SITES) if (g >> i) & 1)
 
-    def canon(community):
-        """Arrival-order canonical form: symmetry-minimal genome set.
+    def canon_perm(community):
+        """Canonical form plus the site permutation that produces it.
 
-        Relabels sites so the first-arriving site is bit 0, etc. --- the
-        lexicographically smallest genome frozenset over all site
-        permutations. Symmetric communities share one canonical node.
+        Returns ``(canonical_set, perm)`` where ``perm`` maps site ``i`` of
+        the input frame to site ``perm[i]`` of the canonical frame (the
+        symmetry-minimal genome frozenset over all site permutations).
         """
         best_key = None
         best = None
@@ -277,8 +277,16 @@ def def_graph(N_SITES, deque, itertools, susc_map):
             mapped = frozenset(_permute_genome(g, perm) for g in community)
             key = tuple(sorted(mapped))
             if best_key is None or key < best_key:
-                best_key, best = key, mapped
+                best_key, best = key, (mapped, perm)
         return best
+
+    def canon(community):
+        """Arrival-order canonical form: symmetry-minimal genome set.
+
+        Relabels sites so the first-arriving site is bit 0, etc. Symmetric
+        communities share one canonical node.
+        """
+        return canon_perm(community)[0]
 
     def bitmask(community):
         m = 0
@@ -303,7 +311,8 @@ def def_graph(N_SITES, deque, itertools, susc_map):
         """BFS from the 000 founder; returns (nodes, edges).
 
         nodes: set of canonical community frozensets.
-        edges: dict (src_tuple, dst_tuple) -> (invader_strain, susc).
+        edges: dict (src_tuple, dst_tuple) -> (label, susc); every edge is a
+        pure gain, labelled ``+<invader>`` in the source frame.
         """
         root = canon(frozenset({0}))
         nodes = {root}
@@ -315,8 +324,9 @@ def def_graph(N_SITES, deque, itertools, susc_map):
                 if susc <= susc_threshold:
                     continue
                 child = canon(community | {strain})
+                label = f"+{format(int(strain), f'0{N_SITES}b')}"
                 edges[(tuple(sorted(community)), tuple(sorted(child)))] = (
-                    int(strain),
+                    label,
                     susc,
                 )
                 if child not in nodes:
@@ -324,7 +334,7 @@ def def_graph(N_SITES, deque, itertools, susc_map):
                     queue.append(child)
         return nodes, edges
 
-    return bitmask, build_assembly_graph, canon, invaders
+    return bitmask, build_assembly_graph, canon, canon_perm, invaders
 
 
 @app.cell
@@ -537,15 +547,27 @@ def delimit_extinction(mo):
 
 
 @app.cell
-def def_extinction_graph(bitmask, canon, deque, invaders, last_map):
-    def survivors(community, threshold):
-        """Strains of `community` still present at update >= threshold.
+def def_extinction_graph(
+    N_SITES, bitmask, canon, canon_perm, deque, invaders, last_map
+):
+    def _survivors_in_frame(community, threshold):
+        """Members of `community` surviving to `threshold`, kept in the input
+        frame (not re-canonicalized), so the gained/lost taxa can be read off
+        in the *parent* frame. Survival is looked up in the community's own
+        even-mix run via the permutation to its canonical array_id."""
+        canonical, perm = canon_perm(community)
+        last = last_map[bitmask(canonical)]
 
-        Read from the community's own even-mix seeded run (strainlast),
-        then re-canonicalized (extinction can leave a non-canonical subset).
-        """
-        last = last_map[bitmask(community)]
-        return canon(frozenset(g for g in community if last[g] >= threshold))
+        def survives(g):
+            mapped = sum(
+                (1 << perm[i]) for i in range(N_SITES) if (g >> i) & 1
+            )
+            return last[mapped] >= threshold
+
+        return frozenset(g for g in community if survives(g))
+
+    def survivors(community, threshold):
+        return canon(_survivors_in_frame(community, threshold))
 
     def build_extinction_graph(window, susc_threshold, ext_threshold):
         """Assembly with extinctions resolved before each further addition.
@@ -554,8 +576,11 @@ def def_extinction_graph(bitmask, canon, deque, invaders, last_map):
         community C' an admissible single-mutation invader (window
         susceptibility > susc_threshold) is added, then the even-mix outcome
         of C' + {x} prunes strains not surviving to ext_threshold, giving the
-        next post-extinction community. Self-transitions (surviving set
-        unchanged) and collapses to the empty set are dropped.
+        next post-extinction community. Each edge is labelled with the
+        *parent-frame* net change --- ``+<invader>`` for the strain that
+        established plus ``-<resident>`` for each resident it drove extinct.
+        Self-transitions (surviving set unchanged) and collapses to the empty
+        set are dropped.
         """
         root = survivors(canon(frozenset({0})), ext_threshold)
         nodes = {root}
@@ -568,11 +593,19 @@ def def_extinction_graph(bitmask, canon, deque, invaders, last_map):
             for strain, susc in invaders(community, window):
                 if susc <= susc_threshold:
                     continue
-                nxt = survivors(canon(community | {strain}), ext_threshold)
+                assembled = community | {strain}
+                surv = _survivors_in_frame(assembled, ext_threshold)
+                nxt = canon(surv)
                 if nxt == community or not nxt:
                     continue
+                gained = sorted(surv - community)
+                lost = sorted(community - surv)
+                label = " ".join(
+                    [f"+{format(g, f'0{N_SITES}b')}" for g in gained]
+                    + [f"-{format(g, f'0{N_SITES}b')}" for g in lost]
+                )
                 edges[(tuple(sorted(community)), tuple(sorted(nxt)))] = (
-                    int(strain),
+                    label,
                     susc,
                 )
                 if nxt not in nodes:
@@ -630,12 +663,12 @@ def peek_graph(N_SITES, graphs):
         _i = sorted(graphs)[0]
         _g = graphs[_i]
         print(f"sample {_i} (window end {_g['window_end']}):")
-        for (a, b), (x, susc) in sorted(
+        for (a, b), (label, susc) in sorted(
             _g["edges"].items(), key=lambda kv: (len(kv[0][0]), kv[0])
         ):
             print(
-                f"  {_binset(a)} --{format(x, f'0{N_SITES}b')}"
-                f" (susc={susc:.3f})--> {_binset(b)}"
+                f"  {_binset(a)} --[{label}] (susc={susc:.3f})--> "
+                f"{_binset(b)}"
             )
     return
 
@@ -649,9 +682,10 @@ def delimit_plot(mo):
     One directed community assembly graph per susceptibility sample,
     rendered with `iplotx` (matplotlib backend) via a `teeplot` loop.
     Communities are laid out left-to-right by the **number of resident
-    strains**, so assembly reads as growth from the `000` founder. Node
-    fill encodes the community via the color key; the number on each node is
-    the count of resident strains. The `000` founder is outlined **green**.
+    strains**, so assembly reads left-to-right as depth from the `000`
+    founder (every edge points rightward). Node fill encodes the community
+    via the color key; the number on each node is the count of resident
+    strains. The `000` founder is outlined **green**.
 
     **Node size** encodes the **even-split assembly flow**: a uniform
     assembly walk starts at the founder with unit weight and splits its
@@ -666,9 +700,11 @@ def delimit_plot(mo):
     hollow pair node it harbours. A terminal community that harbours *no*
     complement pair (an unresolved endpoint) is instead outlined **red**.
 
-    Each invasion edge is optionally labelled with the arrival-ordered
-    invading strain and its measured susceptibility (convergence edges into
-    the pair nodes are unlabelled). Two versions are saved per sample (tagged
+    Each edge is optionally labelled with the **taxon gained** (`+<strain>`,
+    the strain that established) and, in the extinction graphs, any **taxa
+    lost** (`-<strain>`, residents driven extinct by the addition), expressed
+    in the source community's arrival-order frame (convergence edges into the
+    pair nodes are unlabelled). Two versions are saved per graph (tagged
     `edge-labels=strain-susc` vs `edge-labels=none`).
     """
     )
@@ -676,15 +712,64 @@ def delimit_plot(mo):
 
 
 @app.cell
-def def_layout(defaultdict):
-    def layout_layered(nodes, np):
-        """x = community size (# resident strains); y spreads within a layer."""
-        cols = defaultdict(list)
-        for n in nodes:
-            cols[len(n)].append(n)
+def def_layout(defaultdict, deque):
+    def layout_dag(nodes, edges, np):
+        """Sugiyama-style layered layout: x = longest-path depth from the 000
+        founder, so every edge points rightward (no backward arrows even when
+        an extinction transition shrinks a community); y spreads a layer and
+        is barycenter-ordered against the previous layer to limit crossings.
+        Returns ``(coords, max_depth)``.
+        """
+        nodeset = set(nodes)
+        succ = defaultdict(list)
+        pred = defaultdict(list)
+        indeg = {n: 0 for n in nodeset}
+        for a, b in edges:
+            A, B = frozenset(a), frozenset(b)
+            if A in nodeset and B in nodeset:
+                succ[A].append(B)
+                pred[B].append(A)
+                indeg[B] += 1
+
+        # Kahn topological order, then longest-path depth from the sources.
+        ind = dict(indeg)
+        queue = deque(n for n in nodeset if ind[n] == 0)
+        topo = []
+        while queue:
+            u = queue.popleft()
+            topo.append(u)
+            for v in succ.get(u, []):
+                ind[v] -= 1
+                if ind[v] == 0:
+                    queue.append(v)
+        depth = {n: 0 for n in nodeset}
+        for u in topo:
+            for v in succ.get(u, []):
+                depth[v] = max(depth[v], depth[u] + 1)
+
+        layers = defaultdict(list)
+        for n in nodeset:
+            layers[depth[n]].append(n)
+        order = {
+            d: sorted(layers[d], key=lambda k: tuple(sorted(k)))
+            for d in layers
+        }
+        for _ in range(6):  # barycenter crossing-reduction sweeps
+            for d in sorted(order):
+                if d == 0:
+                    continue
+                prev_idx = {n: i for i, n in enumerate(order.get(d - 1, []))}
+                mid = len(order[d]) / 2.0
+
+                def _bary(n, _prev_idx=prev_idx, _mid=mid):
+                    ps = [_prev_idx[p] for p in pred[n] if p in _prev_idx]
+                    return sum(ps) / len(ps) if ps else _mid
+
+                order[d] = sorted(order[d], key=_bary)
+
         coords = {}
-        for x in sorted(cols):
-            layer = sorted(cols[x], key=lambda k: tuple(sorted(k)))
+        for d in order:
+            layer = order[d]
             m = len(layer)
             ys = (
                 np.linspace(-(m - 1) / 2.0, (m - 1) / 2.0, m)
@@ -692,10 +777,10 @@ def def_layout(defaultdict):
                 else [0.0]
             )
             for k, y in zip(layer, ys):
-                coords[k] = (float(x), float(y) * 1.6)
-        return coords
+                coords[k] = (float(d), float(y) * 1.7)
+        return coords, max(depth.values(), default=0)
 
-    return (layout_layered,)
+    return (layout_dag,)
 
 
 @app.cell
@@ -705,7 +790,7 @@ def def_plot(
     defaultdict,
     ig,
     iplotx,
-    layout_layered,
+    layout_dag,
     np,
     plt,
     sns,
@@ -744,11 +829,10 @@ def def_plot(
             comm_set, key=lambda k: (len(k), tuple(sorted(k)))
         )
 
-        # Layout: communities by size; complement-pair end nodes share the
-        # rightmost column (like the reference notebook's end nodes), ordered
-        # by the mean height of their source communities to limit crossings.
-        coords = layout_layered(comm_set, np)
-        maxsize = max((len(k) for k in comm_set), default=1)
+        # Layout: longest-path depth from the founder (edges point rightward);
+        # complement-pair end nodes share the rightmost column, ordered by the
+        # mean height of their source communities to limit crossings.
+        coords, maxdepth = layout_dag(comm_set, edges, np)
         src_y = defaultdict(list)
         for a, pk in pair_edges:
             src_y[pk].append(coords[frozenset(a)][1])
@@ -759,7 +843,7 @@ def def_plot(
         m = len(pairs)
         ys = np.linspace(-(m - 1) / 2.0, (m - 1) / 2.0, m) if m > 1 else [0.0]
         for pk, y in zip(pairs, ys):
-            coords[pk] = (float(maxsize + 1), float(y) * 1.8)
+            coords[pk] = (float(maxdepth + 1), float(y) * 1.8)
 
         nodes = communities + pairs  # community nodes first, pair nodes last
         idx = {_nid(k): i for i, k in enumerate(nodes)}
@@ -770,11 +854,11 @@ def def_plot(
         g = ig.Graph(directed=True)
         g.add_vertices(len(nodes))
         elist, ewidth, elabel = [], [], []
-        max_susc = max((s for _x, s in edges.values()), default=1.0)
-        for (a, b), (x, susc) in edges.items():
+        max_susc = max((s for _lbl, s in edges.values()), default=1.0)
+        for (a, b), (label, susc) in edges.items():
             elist.append((idx[a], idx[b]))
             ewidth.append(1.0 + 3.5 * (susc / max_susc))
-            elabel.append(f"{format(x, f'0{N_SITES}b')}\n{susc:.2f}")
+            elabel.append(label)
         for a, pk in pair_edges:  # convergence into the pair end node
             elist.append((idx[a], idx[pk]))
             ewidth.append(2.0)
@@ -838,7 +922,7 @@ def def_plot(
             )
         if pairs:
             _xlo, _xhi = ax.get_xlim()
-            ax.set_xlim(_xlo, max(_xhi, maxsize + 2.2))
+            ax.set_xlim(_xlo, max(_xhi, maxdepth + 2.2))
 
         # color-coded key: communities (filled) then complement-pair end
         # states (hollow, color-coded outline).
