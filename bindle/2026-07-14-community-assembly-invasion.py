@@ -283,6 +283,31 @@ def def_graph(N_SITES, deque, itertools, susc_map):
         """
         return canon_perm(community)[0]
 
+    def edge_change_label(community, survivors):
+        """Label a transition from canonical ``community`` to
+        ``canon(survivors)``; returns ``(label, child)``.
+
+        ``survivors`` is the surviving genome set in the *parent* frame. The
+        **gained** taxon is relabelled into the **child** frame --- i.e. the
+        arrival-order label the newly established strain carries in the
+        community it joins --- so a fresh site read as ``+001`` then ``+010``
+        then ``+100`` down a path rather than an arbitrary source-frame
+        representative of the symmetric invaders. **Lost** taxa keep their
+        parent-frame labels (they no longer exist in the child). Each taxon is
+        thus labelled in the community where it is actually present.
+        """
+        child, perm = canon_perm(survivors)
+        resident = set(community)
+        gained = sorted(
+            _permute_genome(g, perm) for g in survivors if g not in resident
+        )
+        lost = sorted(resident - set(survivors))
+        label = " ".join(
+            [f"+{format(g, f'0{N_SITES}b')}" for g in gained]
+            + [f"-{format(g, f'0{N_SITES}b')}" for g in lost]
+        )
+        return label, child
+
     def bitmask(community):
         m = 0
         for g in community:
@@ -307,7 +332,7 @@ def def_graph(N_SITES, deque, itertools, susc_map):
 
         nodes: set of canonical community frozensets.
         edges: dict (src_tuple, dst_tuple) -> (label, susc); every edge is a
-        pure gain, labelled ``+<invader>`` in the source frame.
+        pure gain, labelled ``+<strain>`` in the child (arrival-order) frame.
         """
         root = canon(frozenset({0}))
         nodes = {root}
@@ -318,8 +343,9 @@ def def_graph(N_SITES, deque, itertools, susc_map):
             for strain, susc in invaders(community, window):
                 if susc <= susc_threshold:
                     continue
-                child = canon(community | {strain})
-                label = f"+{format(int(strain), f'0{N_SITES}b')}"
+                label, child = edge_change_label(
+                    community, frozenset(community | {strain})
+                )
                 edges[(tuple(sorted(community)), tuple(sorted(child)))] = (
                     label,
                     susc,
@@ -329,7 +355,14 @@ def def_graph(N_SITES, deque, itertools, susc_map):
                     queue.append(child)
         return nodes, edges
 
-    return bitmask, build_assembly_graph, canon, canon_perm, invaders
+    return (
+        bitmask,
+        build_assembly_graph,
+        canon,
+        canon_perm,
+        edge_change_label,
+        invaders,
+    )
 
 
 @app.cell
@@ -546,6 +579,7 @@ def def_extinction_graph(
     canon,
     canon_perm,
     deque,
+    edge_change_label,
     invaders,
     last_map,
 ):
@@ -575,11 +609,11 @@ def def_extinction_graph(
         community C' an admissible single-mutation invader (window
         susceptibility > susc_threshold) is added, then the even-mix outcome
         of C' + {x} prunes strains not surviving to ext_threshold, giving the
-        next post-extinction community. Each edge is labelled with the
-        *parent-frame* net change --- ``+<invader>`` for the strain that
-        established plus ``-<resident>`` for each resident it drove extinct.
-        Self-transitions (surviving set unchanged) and collapses to the empty
-        set are dropped.
+        next post-extinction community. Each edge is labelled with the net
+        change --- ``+<strain>`` (child frame) for the taxon that established
+        plus ``-<resident>`` (parent frame) for each resident it drove
+        extinct. Self-transitions (surviving set unchanged) and collapses to
+        the empty set are dropped.
         """
         root = survivors(canon(frozenset({0})), ext_threshold)
         nodes = {root}
@@ -594,15 +628,9 @@ def def_extinction_graph(
                     continue
                 assembled = community | {strain}
                 surv = _survivors_in_frame(assembled, ext_threshold)
-                nxt = canon(surv)
+                label, nxt = edge_change_label(community, surv)
                 if nxt == community or not nxt:
                     continue
-                gained = sorted(surv - community)
-                lost = sorted(community - surv)
-                label = " ".join(
-                    [f"+{format(g, f'0{N_SITES}b')}" for g in gained]
-                    + [f"-{format(g, f'0{N_SITES}b')}" for g in lost]
-                )
                 edges[(tuple(sorted(community)), tuple(sorted(nxt)))] = (
                     label,
                     susc,
