@@ -191,6 +191,7 @@ jobs:
           git init
           sed -i '/teeplots\//d' bindle/.gitignore
           sed -i '/\*\.ipynb/d' bindle/.gitignore
+          sed -i '/outdata\//d' bindle/.gitignore
           sed -i '/\*\.mp4/d' .gitignore
           rm -rf .gitmodules
       - uses: fregante/setup-git-user@v1
@@ -224,6 +225,7 @@ jobs:
           git init
           sed -i '/teeplots\//d' bindle/.gitignore
           sed -i '/\*\.ipynb/d' bindle/.gitignore
+          sed -i '/outdata\//d' bindle/.gitignore
           sed -i '/\*\.mp4/d' .gitignore
           rm -rf .gitmodules
       - uses: fregante/setup-git-user@v1
