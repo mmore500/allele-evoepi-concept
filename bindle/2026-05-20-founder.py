@@ -754,12 +754,20 @@ def def_simulate(
                 * (host_statuses == 0)[:, None],
                 axis=0,
             )
+            # Raw per-allele immunity level averaged over the whole
+            # population (unlike avg_susc, not masked to currently-
+            # susceptible hosts), so it reflects accumulated immune
+            # memory even in currently-infected/recovered hosts.
+            avg_immunity = xp.mean(host_immunities, axis=0)
 
             immunity_dict = {}
             for i in range(2 * N_SITES):
                 site = i // 2
                 bit = i % 2
                 immunity_dict[f"Susc_S{site}_B{bit}"] = float(avg_susc[i])
+                immunity_dict[f"Immun_S{site}_B{bit}"] = float(
+                    avg_immunity[i],
+                )
 
             log_entry = {
                 "Step": t,
@@ -1896,6 +1904,12 @@ def delimit_run(mo):
     onto every output dataframe, write the dataframes to parquet, and
     render the Hamming-weight case-count stackplot together with the
     inherited strain/allele/R/phylogeny figures.
+
+    Also writes a plain-CSV snapshot of the first 1000 simulation
+    updates of the per-step trajectory --- `Total_Infected` prevalence
+    plus per-allele `Susc_*` susceptibility and `Immun_*` immunity ---
+    with one row per time step, for quick inspection of the base
+    (un-swept) run without a parquet reader.
     """)
     return
 
@@ -2007,6 +2021,21 @@ def run_founder(
     _save("hw", hw_df.assign(**params))
     _save("strain", strain_df.assign(**params))
     _save("records", records_df.assign(**params))
+
+    # Human-readable CSV snapshot of the base-conditions run: one row
+    # per simulation step (Step, Seed, Total_Infected prevalence, plus
+    # per-allele Susc_/Immun_ susceptibility and immunity columns),
+    # truncated to the first 1000 updates for quick inspection without
+    # a parquet reader.
+    traj_csv_dir = out_dir / "traj_csv" / replicate_uid
+    traj_csv_dir.mkdir(parents=True, exist_ok=True)
+    traj_csv_path = traj_csv_dir / f"a=traj-first1000+what={nbname}+ext=.csv"
+    traj_first1000 = traj_df[traj_df["Step"] < 1000].assign(**params)
+    traj_first1000.to_csv(traj_csv_path, index=False)
+    print(
+        f"  wrote first-1000-step traj CSV ({len(traj_first1000)} rows): "
+        f"{traj_csv_path}",
+    )
 
     teeplot_base = {
         "n_sites": N_SITES,
