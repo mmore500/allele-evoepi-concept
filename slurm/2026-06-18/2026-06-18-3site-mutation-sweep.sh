@@ -19,40 +19,38 @@ echo "NOTEBOOK_NAME ${NOTEBOOK_NAME}"
 NOTEBOOK_PATH="bindle/${NOTEBOOK_NAME}.py"
 echo "NOTEBOOK_PATH ${NOTEBOOK_PATH}"
 
-# Sweep: the 2-site model across a geometric mutation-rate sweep with
-# ~2 points per decade (1e-1, 3e-2, 1e-2, ..., 3e-9, 1e-9) and 200
+# Sweep: the 3-site model across a geometric low-mutation-rate sweep
+# with ~2 points per decade, from 3e-5 down to 1e-10, and 100
 # replicates per rate.
-# 17 MUTATION_RATE conditions x 200 replicates = 3400 replicates.
+# 12 MUTATION_RATE conditions x 100 replicates = 1200 replicates.
 #
 # The cluster caps a job array at 1000 queued tasks, so we pack CHUNK=4
 # replicates into each array task and run those 4 *concurrently* (one
 # CPU each, see --cpus-per-task below) rather than sequentially --- this
-# folds 3400 replicates into ceil(3400 / 4) = 850 array tasks (under the
+# folds 1200 replicates into ceil(1200 / 4) = 300 array tasks (under the
 # 1000 cap) while keeping per-task walltime ~1x a single replicate.
 #
 # Global replicate index r in [0, N_TASKS): condition is
-# MUTATION_RATES[r / 200], seed is (r % 200) + 1. Array task t owns the
+# MUTATION_RATES[r / 100], seed is (r % 100) + 1. Array task t owns the
 # CHUNK consecutive indices r = t * CHUNK + j for j in [0, CHUNK), each
 # launched as a background job (indices >= N_TASKS are skipped on the
-# final partial chunk). N_SITES is fixed at 2 (the 2-site model).
-N_SITES=2
+# final partial chunk). N_SITES is fixed at 3 (the 3-site model).
+N_SITES=3
 MUTATION_RATES=(
-    1e-1 3e-2
-    1e-2 3e-3
-    1e-3 3e-4
-    1e-4 3e-5
+    3e-5
     1e-5 3e-6
     1e-6 3e-7
     1e-7 3e-8
     1e-8 3e-9
-    1e-9
+    1e-9 3e-10
+    1e-10
 )
 N_CONDITIONS=${#MUTATION_RATES[@]}
-N_REPLICATES=200
+N_REPLICATES=100
 N_TASKS=$((N_CONDITIONS * N_REPLICATES))
 CHUNK=4
 N_ARRAY_TASKS=$(((N_TASKS + CHUNK - 1) / CHUNK))
-N_STEPS=5000
+N_STEPS=25000
 POP_SIZE=1000000
 echo "N_SITES=${N_SITES} MUTATION_RATES=${MUTATION_RATES[*]}"
 echo "N_REPLICATES=${N_REPLICATES} N_CONDITIONS=${N_CONDITIONS}"
@@ -240,7 +238,7 @@ cat > "${SBATCH_FILE}" << EOF
 #SBATCH --mail-type=FAIL,TIME_LIMIT,ARRAY_TASKS
 #SBATCH --account=ecode
 #SBATCH --requeue
-#SBATCH --array=0-849
+#SBATCH --array=0-299
 
 ${JOB_PREAMBLE}
 
@@ -249,6 +247,10 @@ lscpu || :
 
 echo "cpuinfo ----------------------------------------------------- \${SECONDS}"
 cat /proc/cpuinfo || :
+
+echo "marimo notebook source -------------------------------------- \${SECONDS}"
+echo "notebook source: ${BATCHDIR_JOBSOURCE}/${NOTEBOOK_PATH}"
+cat "${BATCHDIR_JOBSOURCE}/${NOTEBOOK_PATH}" || :
 
 echo "task assignment --------------------------------------------- \${SECONDS}"
 MUTATION_RATES=(${MUTATION_RATES[*]})
@@ -279,10 +281,24 @@ run_replicate() {
     local repdir="\${JOBDIR}/r\${gid}"
     mkdir -p "\${repdir}"
     cd "\${repdir}"
+    # Export from a PRIVATE per-replicate copy of the notebook. Every
+    # replicate --- within this task and across all array tasks sharing
+    # the single _jobsource clone on the network filesystem --- would
+    # otherwise run marimo against the same notebook file. Under that
+    # concurrency marimo clobbers the shared source to an empty default
+    # stub (marimo.App() with one empty cell), after which every later
+    # export yields a blank notebook with no outdata. A private copy
+    # removes the shared-file race. The notebook does 'from pylib import
+    # ...' and marimo puts the notebook's own directory on sys.path, so
+    # the private copy sits beside a pylib symlink.
+    local nbdir="\${repdir}/_nb"
+    mkdir -p "\${nbdir}"
+    cp "${BATCHDIR_JOBSOURCE}/${NOTEBOOK_PATH}" "\${nbdir}/${NOTEBOOK_NAME}.py"
+    ln -sfn "${BATCHDIR_JOBSOURCE}/pylib" "\${nbdir}/pylib"
     echo "  [gid=\${gid}] N_SITES=${N_SITES} MUTATION_RATE=\${rate} SEED=\${seed} repdir=\${repdir}"
     MPLBACKEND=Agg python3.10 -m marimo export ipynb \
         --include-outputs --sort topological -f \
-        "${BATCHDIR_JOBSOURCE}/${NOTEBOOK_PATH}" \
+        "\${nbdir}/${NOTEBOOK_NAME}.py" \
         -o "\${repdir}/${NOTEBOOK_NAME}.ipynb" \
         -- \
         --n-sites ${N_SITES} \
@@ -292,6 +308,29 @@ run_replicate() {
         --pop-size ${POP_SIZE} \
         --engine numpy \
         --skip-plotting True
+
+    # Fail loudly on a blank/failed export. marimo can exit 0 while
+    # producing a notebook whose cells never executed --- and the run
+    # cell is what writes the parquets --- so a "successful" export with
+    # no outputs would otherwise sail through to >>>complete<<<. Require
+    # both a non-trivial exported notebook and the run cell's parquet
+    # outputs under outdata/<nb>/, else fail the replicate (return 1,
+    # caught by the wait loop below).
+    local nb_out="\${repdir}/${NOTEBOOK_NAME}.ipynb"
+    local outdata_dir="\${repdir}/outdata/${NOTEBOOK_NAME}"
+    local nb_bytes
+    nb_bytes=\$(wc -c < "\${nb_out}" 2>/dev/null || echo 0)
+    if [ "\${nb_bytes}" -lt 10000 ]; then
+        echo "ERROR [gid=\${gid}]: exported notebook \${nb_out} missing or trivial (\${nb_bytes} bytes)"
+        return 1
+    fi
+    local n_pqt
+    n_pqt=\$(find "\${outdata_dir}" -name 'a=*+ext=.pqt' 2>/dev/null | wc -l)
+    if [ "\${n_pqt}" -lt 1 ]; then
+        echo "ERROR [gid=\${gid}]: no parquet outputs under \${outdata_dir} (notebook produced no outdata)"
+        return 1
+    fi
+    echo "  [gid=\${gid}] export OK: \${nb_bytes} byte notebook, \${n_pqt} parquet(s) in outdata"
 }
 
 echo "do work (CHUNK=${CHUNK} replicates concurrently) ------------ \${SECONDS}"
