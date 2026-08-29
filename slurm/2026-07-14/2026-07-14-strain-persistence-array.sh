@@ -14,50 +14,39 @@ echo "JOBNAME ${JOBNAME}"
 JOBPROJECT="$(basename -s .git "$(git remote get-url origin)")"
 echo "JOBPROJECT ${JOBPROJECT}"
 
-NOTEBOOK_NAME="2026-05-20-founder"
+NOTEBOOK_NAME="2026-07-14-strain-persistence"
 echo "NOTEBOOK_NAME ${NOTEBOOK_NAME}"
 NOTEBOOK_PATH="bindle/${NOTEBOOK_NAME}.py"
 echo "NOTEBOOK_PATH ${NOTEBOOK_PATH}"
 
-# Sweep: the 2-site model across a geometric mutation-rate sweep with
-# ~2 points per decade (1e-1, 3e-2, 1e-2, ..., 3e-9, 1e-9) and 200
-# replicates per rate.
-# 17 MUTATION_RATE conditions x 200 replicates = 3400 replicates.
+# Community-assembly sweep over the 3-site model (N_SITES=3, so 2 ** 3 =
+# 8 strains, genomes 0..7). Each array task t in [0, 255] initializes one
+# community whose seeded strains are read off the binary code of t: bit j
+# of t set <=> strain j (genome integer j) is seeded. Enumerating t over
+# [0, 255] walks every subset of the 8 strains exactly once (256
+# communities). The seeded strains are mixed equally --- SEED_COUNT_PER_-
+# STRAIN hosts per strain --- and each community is run forward WITHOUT
+# mutation (the notebook fixes MUTATION_RATE=0), so the only genomes that
+# ever circulate are the seeded ones.
 #
-# The cluster caps a job array at 1000 queued tasks, so we pack CHUNK=4
-# replicates into each array task and run those 4 *concurrently* (one
-# CPU each, see --cpus-per-task below) rather than sequentially --- this
-# folds 3400 replicates into ceil(3400 / 4) = 850 array tasks (under the
-# 1000 cap) while keeping per-task walltime ~1x a single replicate.
-#
-# Global replicate index r in [0, N_TASKS): condition is
-# MUTATION_RATES[r / 200], seed is (r % 200) + 1. Array task t owns the
-# CHUNK consecutive indices r = t * CHUNK + j for j in [0, CHUNK), each
-# launched as a background job (indices >= N_TASKS are skipped on the
-# final partial chunk). N_SITES is fixed at 2 (the 2-site model).
-N_SITES=2
-MUTATION_RATES=(
-    1e-1 3e-2
-    1e-2 3e-3
-    1e-3 3e-4
-    1e-4 3e-5
-    1e-5 3e-6
-    1e-6 3e-7
-    1e-7 3e-8
-    1e-8 3e-9
-    1e-9
-)
-N_CONDITIONS=${#MUTATION_RATES[@]}
-N_REPLICATES=200
-N_TASKS=$((N_CONDITIONS * N_REPLICATES))
-CHUNK=4
-N_ARRAY_TASKS=$(((N_TASKS + CHUNK - 1) / CHUNK))
-N_STEPS=5000
+# One replicate per array task (SEED=1); there are exactly 256 array
+# tasks, well under the cluster's 1000-task cap, so --- unlike the packed
+# mutation sweeps --- there is no per-task CHUNK concurrency here. Each
+# replicate emits a single "strainlast" parquet of 8 rows (one per
+# strain) recording the last update at which each strain was observed
+# (-1 = strain never added to this community; N_STEPS = strain added and
+# never went extinct; 0 <= u < N_STEPS = strain added but went extinct at
+# update u). Concatenating across the array yields 256 * 8 = 2048 rows.
+N_SITES=3
+N_STRAINS=$((1 << N_SITES))
+N_ARRAY_TASKS=256
+SEED=1
+N_STEPS=25000
 POP_SIZE=1000000
-echo "N_SITES=${N_SITES} MUTATION_RATES=${MUTATION_RATES[*]}"
-echo "N_REPLICATES=${N_REPLICATES} N_CONDITIONS=${N_CONDITIONS}"
-echo "N_TASKS=${N_TASKS} CHUNK=${CHUNK} N_ARRAY_TASKS=${N_ARRAY_TASKS}"
-echo "N_STEPS=${N_STEPS} POP_SIZE=${POP_SIZE}"
+SEED_COUNT_PER_STRAIN=10
+echo "N_SITES=${N_SITES} N_STRAINS=${N_STRAINS} N_ARRAY_TASKS=${N_ARRAY_TASKS}"
+echo "SEED=${SEED} N_STEPS=${N_STEPS} POP_SIZE=${POP_SIZE}"
+echo "SEED_COUNT_PER_STRAIN=${SEED_COUNT_PER_STRAIN}"
 
 SOURCE_REVISION="$(git rev-parse HEAD)"
 echo "SOURCE_REVISION ${SOURCE_REVISION}"
@@ -232,15 +221,15 @@ echo "SBATCH_FILE ${SBATCH_FILE}"
 cat > "${SBATCH_FILE}" << EOF
 #!/bin/bash
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=${CHUNK}
-#SBATCH --mem=64G
-#SBATCH --time=4:00:00
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=16G
+#SBATCH --time=8:00:00
 #SBATCH --output="/mnt/home/%u/joblog/%j"
 #SBATCH --mail-user=mawni4ah2o@pomail.net
 #SBATCH --mail-type=FAIL,TIME_LIMIT,ARRAY_TASKS
 #SBATCH --account=ecode
 #SBATCH --requeue
-#SBATCH --array=0-849
+#SBATCH --array=0-$((N_ARRAY_TASKS - 1))
 
 ${JOB_PREAMBLE}
 
@@ -250,76 +239,75 @@ lscpu || :
 echo "cpuinfo ----------------------------------------------------- \${SECONDS}"
 cat /proc/cpuinfo || :
 
-echo "task assignment --------------------------------------------- \${SECONDS}"
-MUTATION_RATES=(${MUTATION_RATES[*]})
-TASK_ID=\${SLURM_ARRAY_TASK_ID:-0}
-echo "TASK_ID=\${TASK_ID} CHUNK=${CHUNK} N_SITES=${N_SITES}"
-echo "owns global replicate indices \$((TASK_ID * ${CHUNK})) .. \$((TASK_ID * ${CHUNK} + ${CHUNK} - 1))"
+echo "marimo notebook source -------------------------------------- \${SECONDS}"
+echo "notebook source: ${BATCHDIR_JOBSOURCE}/${NOTEBOOK_PATH}"
+cat "${BATCHDIR_JOBSOURCE}/${NOTEBOOK_PATH}" || :
 
-# Each of the CHUNK replicates runs as its own single-threaded process
-# so all CHUNK share the array task's CPUs (--cpus-per-task=${CHUNK})
-# without oversubscribing: pin the numeric libraries to one thread each.
+echo "task assignment --------------------------------------------- \${SECONDS}"
+# The array task id IS the community index (array_id) --- its 8-bit
+# binary code selects which of the 8 strains are seeded (see notebook).
+ARRAY_ID=\${SLURM_ARRAY_TASK_ID:-0}
+echo "ARRAY_ID=\${ARRAY_ID} N_SITES=${N_SITES} SEED=${SEED}"
+printf 'community bits: %08d\n' "\$(echo "obase=2; \${ARRAY_ID}" | bc)" || :
+
+# Single-threaded numpy so the one replicate stays within its one CPU
+# (--cpus-per-task=1).
 export OMP_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1
 
-# Run one founder replicate (one global index) on CPU (engine=numpy, no
-# GPU requested in #SBATCH). --skip-plotting=True drops the per-replicate
-# teeplots --- the parquets are the deliverable. Each replicate runs in
-# its own working dir \${JOBDIR}/r<gid> and the notebook writes parquets
-# to that dir's outdata/${NOTEBOOK_NAME}/<kind>/<uid>/... with simulation
-# parameters (n_sites, pop_size, n_steps, seed, mutation_rate, ...) and a
-# uuid replicate identifier stamped onto every row, so the mutation rate
-# is recoverable downstream.
-run_replicate() {
-    local gid="\$1"
-    local rate="\${MUTATION_RATES[\$((gid / ${N_REPLICATES}))]}"
-    local seed="\$((gid % ${N_REPLICATES} + 1))"
-    local repdir="\${JOBDIR}/r\${gid}"
-    mkdir -p "\${repdir}"
-    cd "\${repdir}"
-    echo "  [gid=\${gid}] N_SITES=${N_SITES} MUTATION_RATE=\${rate} SEED=\${seed} repdir=\${repdir}"
-    MPLBACKEND=Agg python3.10 -m marimo export ipynb \
-        --include-outputs --sort topological -f \
-        "${BATCHDIR_JOBSOURCE}/${NOTEBOOK_PATH}" \
-        -o "\${repdir}/${NOTEBOOK_NAME}.ipynb" \
-        -- \
-        --n-sites ${N_SITES} \
-        --mutation-rate "\${rate}" \
-        --seed "\${seed}" \
-        --n-steps ${N_STEPS} \
-        --pop-size ${POP_SIZE} \
-        --engine numpy \
-        --skip-plotting True
-}
+echo "do work ----------------------------------------------------- \${SECONDS}"
+# Run one community replicate on CPU (engine=numpy). The notebook writes
+# its single "strainlast" parquet to
+# outdata/${NOTEBOOK_NAME}/strainlast/<uid>/... with the simulation
+# parameters, the array_id, and a uuid replicate identifier stamped onto
+# every row, so the community is fully recoverable downstream.
+#
+# Export from a PRIVATE per-task copy of the notebook. Every array task
+# would otherwise run marimo against the same notebook file inside the
+# single _jobsource clone on the network filesystem; under that
+# concurrency marimo can clobber the shared source to an empty default
+# stub, after which later exports yield a blank notebook with no outdata.
+# A private copy removes that shared-file race. The notebook does
+# 'from pylib import ...', and marimo puts the notebook's own directory
+# on sys.path, so the private copy sits beside a pylib symlink.
+NBDIR="\${JOBDIR}/_nb"
+mkdir -p "\${NBDIR}"
+cp "${BATCHDIR_JOBSOURCE}/${NOTEBOOK_PATH}" "\${NBDIR}/${NOTEBOOK_NAME}.py"
+ln -sfn "${BATCHDIR_JOBSOURCE}/pylib" "\${NBDIR}/pylib"
 
-echo "do work (CHUNK=${CHUNK} replicates concurrently) ------------ \${SECONDS}"
-declare -A REP_PID
-for j in \$(seq 0 \$((${CHUNK} - 1))); do
-    GID=\$((TASK_ID * ${CHUNK} + j))
-    if [ "\${GID}" -ge ${N_TASKS} ]; then
-        echo "  skipping global index \${GID} (>= ${N_TASKS}, partial final chunk)"
-        continue
-    fi
-    run_replicate "\${GID}" &
-    REP_PID[\${GID}]=\$!
-done
+MPLBACKEND=Agg python3.10 -m marimo export ipynb \
+    --include-outputs --sort topological -f \
+    "\${NBDIR}/${NOTEBOOK_NAME}.py" \
+    -o "\${JOBDIR}/${NOTEBOOK_NAME}.ipynb" \
+    -- \
+    --array-id "\${ARRAY_ID}" \
+    --seed ${SEED} \
+    --n-steps ${N_STEPS} \
+    --pop-size ${POP_SIZE} \
+    --seed-count-per-strain ${SEED_COUNT_PER_STRAIN} \
+    --engine numpy \
+    --skip-plotting True
 
-echo "launched \${#REP_PID[@]} replicate(s); waiting -------------- \${SECONDS}"
-WORK_FAIL=0
-for gid in "\${!REP_PID[@]}"; do
-    if wait "\${REP_PID[\${gid}]}"; then
-        echo "  replicate gid=\${gid} ok"
-    else
-        echo "  replicate gid=\${gid} FAILED (pid \${REP_PID[\${gid}]})"
-        WORK_FAIL=1
-    fi
-done
-if [ "\${WORK_FAIL}" -ne 0 ]; then
-    echo "one or more replicates failed; failing array task"
+# Fail loudly on a blank/failed export. marimo can exit 0 while producing
+# a notebook whose cells never executed --- and the run cell is what
+# writes the parquet --- so a "successful" export with no outputs would
+# otherwise sail through to >>>complete<<<. Require both a non-trivial
+# exported notebook and the run cell's parquet output under outdata/<nb>/.
+NB_OUT="\${JOBDIR}/${NOTEBOOK_NAME}.ipynb"
+OUTDATA_DIR="\${JOBDIR}/outdata/${NOTEBOOK_NAME}"
+NB_BYTES=\$(wc -c < "\${NB_OUT}" 2>/dev/null || echo 0)
+if [ "\${NB_BYTES}" -lt 10000 ]; then
+    echo "ERROR [array_id=\${ARRAY_ID}]: exported notebook \${NB_OUT} missing or trivial (\${NB_BYTES} bytes)"
     exit 1
 fi
+N_PQT=\$(find "\${OUTDATA_DIR}" -name 'a=*+ext=.pqt' 2>/dev/null | wc -l)
+if [ "\${N_PQT}" -lt 1 ]; then
+    echo "ERROR [array_id=\${ARRAY_ID}]: no parquet outputs under \${OUTDATA_DIR} (notebook produced no outdata)"
+    exit 1
+fi
+echo "  [array_id=\${ARRAY_ID}] export OK: \${NB_BYTES} byte notebook, \${N_PQT} parquet(s) in outdata"
 
 echo "finalization telemetry -------------------------------------- \${SECONDS}"
 ls -lR "\${JOBDIR}" | head -200
@@ -371,22 +359,22 @@ pushd "${BATCHDIR}/.."
     "\$(basename "${BATCHDIR}")"/__*
 popd
 
-echo "   - join per-replicate parquets across all conditions"
-# Each per-replicate parquet already carries the replicate_uid plus the
-# condition columns (n_sites, pop_size, n_steps, seed, engine, pow,
-# mutation_rate, contact_rate, ...) stamped by the notebook's run cell,
-# so a straight concatenation yields a self-describing collated frame
-# that includes the swept mutation_rate. The strain parquet is the
-# headline output --- one row per (replicate_uid, Step, strain)
-# recording the per-genome infection count (n_cases) and new-infection
-# count (n_new_infections) alongside the population-fraction
-# counterparts. The hw parquet aggregates those per-genome counts by
-# Hamming weight (n_cases per HW band).
-for kind in strain hw traj records phylo; do
+echo "   - join per-replicate parquets across all communities"
+# Each per-replicate parquet already carries the replicate_uid, the
+# array_id, and the condition columns (n_sites, pop_size, n_steps, seed,
+# engine, mutation_rate, ...) stamped by the notebook's run cell, so a
+# straight concatenation yields a self-describing collated frame.
+#   - strainlast: 8 rows per replicate (one per strain) recording each
+#     strain's last-observed update; 256 communities x 8 strains = 2048
+#     rows in the joined frame.
+#   - susc: 8 rows per strain per 1000-update window --- a trailing
+#     1000-update average of each strain's population-mean susceptibility,
+#     snapshotted every 1000 updates.
+for kind in strainlast susc; do
     echo "    joining \${kind} ..."
     out_path="${BATCHDIR_JOBRESULT}/a=\${kind}+date=${JOBDATE}+job=${JOBNAME}+ext=.pqt"
-    # __<arrayid>/r<gid>/outdata/... --- one r<gid> subdir per packed
-    # replicate (globstar ** also tolerates the un-nested layout).
+    # __<arrayid>/outdata/... --- one output dir per array task (globstar
+    # ** also tolerates a nested layout).
     ls -1 "${BATCHDIR}"/__*/**/outdata/${NOTEBOOK_NAME}/\${kind}/*/a=\${kind}+*+ext=.pqt 2>/dev/null \
         | tee /dev/stderr \
         | python3.10 -m joinem --progress "\${out_path}" \

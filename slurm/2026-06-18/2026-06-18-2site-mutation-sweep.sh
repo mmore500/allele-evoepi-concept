@@ -250,6 +250,10 @@ lscpu || :
 echo "cpuinfo ----------------------------------------------------- \${SECONDS}"
 cat /proc/cpuinfo || :
 
+echo "marimo notebook source -------------------------------------- \${SECONDS}"
+echo "notebook source: ${BATCHDIR_JOBSOURCE}/${NOTEBOOK_PATH}"
+cat "${BATCHDIR_JOBSOURCE}/${NOTEBOOK_PATH}" || :
+
 echo "task assignment --------------------------------------------- \${SECONDS}"
 MUTATION_RATES=(${MUTATION_RATES[*]})
 TASK_ID=\${SLURM_ARRAY_TASK_ID:-0}
@@ -292,6 +296,29 @@ run_replicate() {
         --pop-size ${POP_SIZE} \
         --engine numpy \
         --skip-plotting True
+
+    # Fail loudly on a blank/failed export. marimo can exit 0 while
+    # producing a notebook whose cells never executed --- and the run
+    # cell is what writes the parquets --- so a "successful" export with
+    # no outputs would otherwise sail through to >>>complete<<<. Require
+    # both a non-trivial exported notebook and the run cell's parquet
+    # outputs under outdata/<nb>/, else fail the replicate (return 1,
+    # caught by the wait loop below).
+    local nb_out="\${repdir}/${NOTEBOOK_NAME}.ipynb"
+    local outdata_dir="\${repdir}/outdata/${NOTEBOOK_NAME}"
+    local nb_bytes
+    nb_bytes=\$(wc -c < "\${nb_out}" 2>/dev/null || echo 0)
+    if [ "\${nb_bytes}" -lt 10000 ]; then
+        echo "ERROR [gid=\${gid}]: exported notebook \${nb_out} missing or trivial (\${nb_bytes} bytes)"
+        return 1
+    fi
+    local n_pqt
+    n_pqt=\$(find "\${outdata_dir}" -name 'a=*+ext=.pqt' 2>/dev/null | wc -l)
+    if [ "\${n_pqt}" -lt 1 ]; then
+        echo "ERROR [gid=\${gid}]: no parquet outputs under \${outdata_dir} (notebook produced no outdata)"
+        return 1
+    fi
+    echo "  [gid=\${gid}] export OK: \${nb_bytes} byte notebook, \${n_pqt} parquet(s) in outdata"
 }
 
 echo "do work (CHUNK=${CHUNK} replicates concurrently) ------------ \${SECONDS}"
