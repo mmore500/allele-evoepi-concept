@@ -164,15 +164,20 @@ def delimit_outcome(mo):
     - **founder strain (0000/1111)**: Hamming weights `0` and `4`,
       i.e. the all-zero founder/wildtype genome and its bitwise
       complement (`hw in {0, 4}`, 2 of the 16 genomes).
-    - **HW 1/2/3 intermediate**: Hamming weights `1`, `2`, and `3`,
-      the one-, two-, and three-mutation classes (`hw in {1, 2, 3}`,
-      the other 14 of the 16 genomes) --- `hw` `1` and `3` are bitwise
-      complements of one another, and `hw` `2` is self-complementary.
+    - **HW 1/3 complements**: Hamming weights `1` and `3`, the one-
+      and three-mutation classes that are bitwise complements of one
+      another (`hw in {1, 3}`, 8 of the 16 genomes).
+    - **HW 2 self-complementary**: Hamming weight `2`, the
+      two-mutation class that is its own bitwise complement (`hw == 2`,
+      the remaining 6 of the 16 genomes).
 
-    We classify each replicate's end-state into one of these two
-    categories, then ask how the **probability of the founder strain
-    fixing** (vs. the HW 1/2/3 intermediate classes fixing) depends on
-    the swept `mutation_rate`.
+    We classify each replicate's end-state into one of these three
+    categories, then ask how the **fixation probability of each
+    class** depends on the swept `mutation_rate`. Splitting HW 1/3 from
+    HW 2 (rather than lumping all of `hw in {1, 2, 3}` together, as the
+    2-/3-site companion notebooks do) matters here because the two
+    classes carry different genome counts (8 vs. 6 of 16) and thus
+    different chance baselines.
     """
     )
     return
@@ -193,11 +198,14 @@ def compute_outcome(hw_df):
     ].copy()
 
     # Founder strain (0000/1111) == extreme Hamming weights {0, N_SITES};
-    # HW 1/2/3 intermediate == the three middle weights {1, 2, 3}.
+    # HW 2 == the self-complementary middle weight (N_SITES / 2); the
+    # remaining weights are the HW 1/3 complement pair.
     outcome_df["group"] = outcome_df["hw"].map(
         lambda _hw: "founder (0000/1111)"
         if _hw in (0, _n_sites)
-        else "HW 1/2/3 (intermediate)",
+        else "HW 2 (self-complementary)"
+        if _hw == _n_sites // 2
+        else "HW 1/3 (complements)",
     )
     print(f"outcome frame: {outcome_df.shape}")
     print(
@@ -216,16 +224,15 @@ def delimit_stats(mo):
         """
     ## Exact (Clopper-Pearson) 95% Confidence Intervals
 
-    For each `mutation_rate` the fixation outcome is a Bernoulli trial
-    per replicate (founder strain fixes or not), so the per-condition
-    fraction of replicates is a **binomial proportion**. We summarize
-    it with the **exact Clopper-Pearson interval** via
-    `scipy.stats.binomtest(k, n).proportion_ci(method="exact")` --- an
-    exact estimator CI inverted from the binomial CDF, **not** a
-    bootstrap. The complementary "HW 1/2/3 (intermediate)" series uses
-    the same exact construction on the `n - k` complementary
-    successes, so its interval is the exact CI for that proportion
-    (and is not merely a reflection of the founder interval).
+    Each replicate's dominant-class label is one of three mutually
+    exclusive, collectively exhaustive outcomes, so for each
+    `mutation_rate` the "class X fixes vs. it doesn't" indicator is a
+    Bernoulli trial per replicate and the per-condition fraction is a
+    **binomial proportion**. We summarize each of the three group
+    proportions independently with the **exact Clopper-Pearson
+    interval** via `scipy.stats.binomtest(k, n).proportion_ci(
+    method="exact")` --- an exact estimator CI inverted from the
+    binomial CDF, **not** a bootstrap.
     Per-condition replicate counts in this sweep snapshot are uneven
     and can be as low as single digits (vs. the planned 25), so expect
     some of these intervals --- especially at the sparser conditions
@@ -237,17 +244,17 @@ def delimit_stats(mo):
 
 @app.cell
 def compute_stats(outcome_df, pd, sps):
-    _groups = ["founder (0000/1111)", "HW 1/2/3 (intermediate)"]
+    _groups = [
+        "founder (0000/1111)",
+        "HW 1/3 (complements)",
+        "HW 2 (self-complementary)",
+    ]
     _rows = []
     for _mr, _sub in outcome_df.groupby("mutation_rate"):
         _n = len(_sub)
-        _k_founder = int((_sub["group"] == "founder (0000/1111)").sum())
-        _k_by_group = {
-            "founder (0000/1111)": _k_founder,
-            "HW 1/2/3 (intermediate)": _n - _k_founder,
-        }
+        _counts = _sub["group"].value_counts()
         for _group in _groups:
-            _k = _k_by_group[_group]
+            _k = int(_counts.get(_group, 0))
             _ci = sps.binomtest(_k, _n).proportion_ci(
                 confidence_level=0.95,
                 method="exact",
@@ -286,10 +293,12 @@ def delimit_plot(mo):
     group. The shaded **band shows the exact (Clopper-Pearson) 95%
     confidence interval** computed above (seaborn's own bootstrap CI
     is disabled via `errorbar=None`; the band is drawn from the exact
-    estimator). The dashed **horizontal rule at 12.5%** marks the
-    chance expectation that one of the two founder-aligned genomes
-    (0000/1111, 2 of the 16 possible 4-site genomes) fixes under a
-    uniform-over-genomes null. Gaps along the x-axis reflect
+    estimator). Each group gets its own color-matched dashed
+    **horizontal chance-expectation rule**, at the genome-count fraction
+    of the 16 possible 4-site genomes it covers: **12.5%** for founder
+    (0000/1111, 2 genomes), **50%** for HW 1/3 complements (8 genomes),
+    and **37.5%** for HW 2 self-complementary (6 genomes) --- all under
+    a uniform-over-genomes null. Gaps along the x-axis reflect
     mutation-rate conditions with no completed replicates yet in this
     sweep snapshot.
     """
@@ -299,10 +308,23 @@ def delimit_plot(mo):
 
 @app.cell
 def plot_fixation(pathlib, sns, summary_df, tp):
-    _groups = ["founder (0000/1111)", "HW 1/2/3 (intermediate)"]
+    _groups = [
+        "founder (0000/1111)",
+        "HW 1/3 (complements)",
+        "HW 2 (self-complementary)",
+    ]
     _palette = dict(
         zip(_groups, sns.color_palette("colorblind", n_colors=len(_groups))),
     )
+    # Genome-count fraction of the 16 possible 4-site genomes each group
+    # covers, under a uniform-over-genomes null: founder {0000, 1111}
+    # (2), HW 1/3 complements (2 * C(4,1) = 8), HW 2 self-complementary
+    # (C(4,2) = 6).
+    _chance = {
+        "founder (0000/1111)": 2 / 16,
+        "HW 1/3 (complements)": 8 / 16,
+        "HW 2 (self-complementary)": 6 / 16,
+    }
 
     with tp.teed(
         sns.lineplot,
@@ -314,7 +336,7 @@ def plot_fixation(pathlib, sns, summary_df, tp):
         palette=_palette,
         marker="o",
         errorbar=None,
-        teeplot_outattrs={"a": "founder-vs-hw123-fixation-prob"},
+        teeplot_outattrs={"a": "founder-vs-hw13-vs-hw2-fixation-prob"},
         teeplot_show=True,
         teeplot_subdir=pathlib.Path(__file__).stem,
     ) as _ax:
@@ -331,14 +353,15 @@ def plot_fixation(pathlib, sns, summary_df, tp):
                 alpha=0.2,
                 linewidth=0,
             )
-        # Chance expectation for the founder pair (2 of 16 genomes).
-        _ax.axhline(
-            0.125,
-            color="black",
-            linestyle="--",
-            linewidth=1.0,
-            label="12.5% (chance)",
-        )
+        # Color-matched chance-expectation rule per group.
+        for _group in _groups:
+            _ax.axhline(
+                _chance[_group],
+                color=_palette[_group],
+                linestyle="--",
+                linewidth=1.0,
+                label=f"{_group} chance ({_chance[_group]:.1%})",
+            )
         _ax.set_xscale("log")
         _ax.set_ylim(-0.02, 1.02)
         _ax.set_xlabel("mutation rate (log scale)")
