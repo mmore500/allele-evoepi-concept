@@ -54,36 +54,54 @@ def delimit_data(mo):
         """
     ## Data
 
-    Load the per-replicate Hamming-weight **end-state** table produced
-    by the 4-site mutation-rate sweep slurm job
-    (`slurm/2026-08-26/2026-08-26-4site-mutation-sweep.sh`, driven by
-    notebook `bindle/2026-05-20-founder.py`), cached as a parquet on
-    OSF (https://osf.io/96r2v). The sweep targets `N_SITES=4` across a
-    12-condition geometric grid of `MUTATION_RATE` from `1e-5` down to
-    `3e-11` (~2 points per decade) at 25 replicates per condition (300
-    replicates planned), 150,000 steps per replicate,
-    POP_SIZE=1,000,000, on CPU (engine=numpy).
+    Load the per-replicate Hamming-weight **end-state** table for the
+    4-site mutation-rate sweep, combining two complementary slurm jobs
+    (both driven by notebook `bindle/2026-05-20-founder.py`, fixing
+    `N_SITES=4` and `POP_SIZE=1,000,000` on CPU, engine=numpy) that
+    together span the swept range:
 
-    This sweep was still in flight when this notebook was written: not
-    every planned condition has completed replicates yet, and
-    completed conditions can have far fewer than 25 replicates apiece
-    --- see the `mutation_rate x replicate counts` diagnostic printed
-    below for the live picture, and treat the resulting confidence
-    intervals as provisional (they should tighten, and any missing
-    conditions fill in, as the sweep continues and this OSF file is
-    refreshed).
+    - **deep / low-rate** sweep
+      (`slurm/2026-08-26/2026-08-26-4site-mutation-sweep.sh`, OSF
+      https://osf.io/96r2v): `MUTATION_RATE` from `1e-5` down to
+      `3e-11` (~2 points per decade, 12 conditions planned), 25
+      replicates per condition (300 planned), **`N_STEPS=150,000`**.
+    - **wide / high-rate** sweep
+      (`slurm/2026-08-29/2026-08-29-4site-mutation-sweep.sh`, OSF
+      https://osf.io/m6hzn): `MUTATION_RATE` from `1e-1` down to
+      `3e-6` (~2 points per decade, 10 conditions), 200 replicates per
+      condition (2000 planned), **`N_STEPS=5,000`** (dynamics saturate
+      quickly at these higher rates, so a much shorter run suffices).
 
-    Unlike the smaller companion sweeps, the OSF file backing this
-    notebook is the **full per-step trajectory table** (one row per
-    `(replicate_uid, Step, hw)`) rather than a pre-filtered end-state
-    export, so loading it wholesale with `pandas` risks exhausting
-    memory. Instead, the final-step filter (`Step == max(Step)`) is
-    pushed down through `pyarrow.dataset` before materializing to
-    `pandas`, since every completed replicate is recorded densely for
-    every step (no checkpointing).
+    The two jobs are designed to abut at `1e-5`/`3e-6` with no overlap,
+    and in this data snapshot they don't actually overlap (the deep
+    sweep hasn't yet produced replicates at those two shared rungs) ---
+    but if it later does, watch the `mutation_rate x n_steps x
+    replicate counts` diagnostic printed below: replicates sharing a
+    `mutation_rate` but differing `n_steps` come from different
+    equilibration depths and shouldn't be treated as directly
+    comparable.
 
-    The OSF file is downloaded with `requests` and cached at
-    `/tmp/<slug>` so re-runs hit the local copy.
+    The deep sweep was still in flight when this notebook was written:
+    not every planned condition has completed replicates yet, and
+    completed conditions can have far fewer than 25 replicates apiece.
+    The wide sweep is essentially complete (200 replicates at every
+    condition except `3e-4`, which has 180). Treat the deep sweep's
+    confidence intervals as provisional accordingly (they should
+    tighten, and any missing conditions fill in, as the sweep
+    continues and its OSF file is refreshed).
+
+    Unlike the smaller companion sweeps, both OSF files back this
+    notebook as **full per-step trajectory tables** (one row per
+    `(replicate_uid, Step, hw)`) rather than pre-filtered end-state
+    exports, so loading either wholesale with `pandas` risks
+    exhausting memory. Instead, each file's final-step filter
+    (`Step == max(Step)`, computed per file since `N_STEPS` differs
+    between them) is pushed down through `pyarrow.dataset` before
+    materializing to `pandas` and concatenating, since every completed
+    replicate is recorded densely for every step (no checkpointing).
+
+    Both OSF files are downloaded with `requests` and cached at
+    `/tmp/<slug>` so re-runs hit the local copies.
     """
     )
     return
@@ -91,57 +109,96 @@ def delimit_data(mo):
 
 @app.cell
 def configure_args(mo):
-    # CLI args. Defaults pull the 4-site mutation-sweep hw parquet that
-    # backs this notebook (OSF https://osf.io/96r2v).
+    # CLI args. Defaults pull the two 4-site mutation-sweep hw parquets
+    # that back this notebook: the deep low-rate sweep (OSF
+    # https://osf.io/96r2v) and the wide high-rate sweep (OSF
+    # https://osf.io/m6hzn) --- see the Data section above.
     _args = mo.cli_args()
-    OSF_SLUG = str(_args.get("osf-slug") or "96r2v")
-    OSF_URL = str(
-        _args.get("osf-url") or f"https://osf.io/{OSF_SLUG}/download",
+    OSF_SLUG_DEEP = str(_args.get("osf-slug-deep") or "96r2v")
+    OSF_URL_DEEP = str(
+        _args.get("osf-url-deep")
+        or f"https://osf.io/{OSF_SLUG_DEEP}/download",
     )
-    print(f"args: OSF_SLUG={OSF_SLUG} OSF_URL={OSF_URL}")
-    return OSF_SLUG, OSF_URL
+    OSF_SLUG_WIDE = str(_args.get("osf-slug-wide") or "m6hzn")
+    OSF_URL_WIDE = str(
+        _args.get("osf-url-wide")
+        or f"https://osf.io/{OSF_SLUG_WIDE}/download",
+    )
+    print(f"args: OSF_SLUG_DEEP={OSF_SLUG_DEEP} OSF_URL_DEEP={OSF_URL_DEEP}")
+    print(f"args: OSF_SLUG_WIDE={OSF_SLUG_WIDE} OSF_URL_WIDE={OSF_URL_WIDE}")
+    return OSF_SLUG_DEEP, OSF_SLUG_WIDE, OSF_URL_DEEP, OSF_URL_WIDE
 
 
 @app.cell
-def download_data(OSF_SLUG, OSF_URL, pathlib, requests):
-    cache_path = pathlib.Path("/tmp") / OSF_SLUG
-    if not cache_path.exists():
-        print(f"downloading {OSF_URL} -> {cache_path}")
-        resp = requests.get(OSF_URL, allow_redirects=True, timeout=300)
-        resp.raise_for_status()
-        cache_path.write_bytes(resp.content)
-    else:
-        print(f"reusing cached {cache_path}")
-    print(f"size: {cache_path.stat().st_size} bytes")
-    return (cache_path,)
+def download_data(
+    OSF_SLUG_DEEP,
+    OSF_SLUG_WIDE,
+    OSF_URL_DEEP,
+    OSF_URL_WIDE,
+    pathlib,
+    requests,
+):
+    def _download(slug, url):
+        cache_path = pathlib.Path("/tmp") / slug
+        if not cache_path.exists():
+            print(f"downloading {url} -> {cache_path}")
+            resp = requests.get(url, allow_redirects=True, timeout=300)
+            resp.raise_for_status()
+            cache_path.write_bytes(resp.content)
+        else:
+            print(f"reusing cached {cache_path}")
+        print(f"size: {cache_path.stat().st_size} bytes")
+        return cache_path
+
+    cache_path_deep = _download(OSF_SLUG_DEEP, OSF_URL_DEEP)
+    cache_path_wide = _download(OSF_SLUG_WIDE, OSF_URL_WIDE)
+    return cache_path_deep, cache_path_wide
 
 
 @app.cell
-def load_data(cache_path, ds, pc):
-    # The parquet is the full per-step trajectory table (~75M rows for
-    # this sweep), so avoid pd.read_parquet(cache_path) --- loading
-    # every step of every replicate into pandas is enough on its own to
-    # exhaust memory on a typical runner. Every completed replicate is
-    # recorded densely for every step (no checkpointing), so pushing a
-    # Step == max(Step) filter down through pyarrow before converting
-    # to pandas recovers exactly the end-state rows at a fraction of
-    # the memory cost.
-    _dataset = ds.dataset(cache_path, format="parquet")
-    _max_step = pc.max(_dataset.to_table(columns=["Step"])["Step"]).as_py()
-    hw_df = _dataset.to_table(
-        filter=(pc.field("Step") == _max_step),
-        columns=[
-            "hw",
-            "n_cases",
-            "replicate_uid",
-            "mutation_rate",
-            "n_sites",
+def load_data(cache_path_deep, cache_path_wide, ds, pc, pd):
+    def _load_final_step(cache_path):
+        # Each parquet is the full per-step trajectory table for its
+        # sweep, so avoid pd.read_parquet(cache_path) --- loading every
+        # step of every replicate into pandas is enough on its own to
+        # exhaust memory on a typical runner. Every completed replicate
+        # is recorded densely for every step (no checkpointing), so
+        # pushing a Step == max(Step) filter down through pyarrow
+        # before converting to pandas recovers exactly the end-state
+        # rows at a fraction of the memory cost. max(Step) is computed
+        # per file since N_STEPS differs between the deep and wide
+        # sweeps.
+        _dataset = ds.dataset(cache_path, format="parquet")
+        _max_step = pc.max(
+            _dataset.to_table(columns=["Step"])["Step"],
+        ).as_py()
+        return _dataset.to_table(
+            filter=(pc.field("Step") == _max_step),
+            columns=[
+                "hw",
+                "n_cases",
+                "replicate_uid",
+                "mutation_rate",
+                "n_sites",
+                "n_steps",
+            ],
+        ).to_pandas()
+
+    hw_df = pd.concat(
+        [
+            _load_final_step(cache_path_deep),
+            _load_final_step(cache_path_wide),
         ],
-    ).to_pandas()
+        ignore_index=True,
+    )
     print(f"loaded hw end-state dataframe: {hw_df.shape}")
     print(
-        "mutation_rate x replicate counts:\n"
-        + str(hw_df.groupby("mutation_rate")["replicate_uid"].nunique()),
+        "mutation_rate x n_steps x replicate counts:\n"
+        + str(
+            hw_df.groupby(["mutation_rate", "n_steps"])[
+                "replicate_uid"
+            ].nunique(),
+        ),
     )
     return (hw_df,)
 
