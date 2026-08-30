@@ -213,40 +213,38 @@ def delimit_outcome(mo):
     mo.md("""
     ## Fixation Outcome per Replicate
 
-    For each replicate, identify the **dominant Hamming-weight class**
-    at its final simulation step by case count (`n_cases`) --- the
-    Hamming-weight bin that has "fixed" as the most-populous strain
-    cluster at end-state, following the coarse strain identifier used
-    in the founder-convergence analyses. Replicates from all three
-    sweeps are pooled together at each `mutation_rate` (see the Data
-    section above): a replicate that hasn't actually settled on an
-    outcome by its final step --- disproportionately likely among the
-    wide sweeps' shallower `N_STEPS=5,000` runs --- falls into its own
-    **"not converged"** group below rather than being forced into a
-    class it hasn't really reached, or requiring a separate depth-based
-    series.
+    For each replicate, classify its final-simulation-step case counts
+    (`n_cases`, summed into Hamming-weight bins) into one of four
+    outcomes. A replicate has **converged on a complement pair** only
+    if **both members of that pair each hold at least 1/3 of its
+    total** final-step cases --- e.g. a replicate sitting at ~93%
+    `hw=0` with `hw=4` still at 0% hasn't reached the founder pair, it
+    simply hasn't had a mutation reach the far extreme yet, so it
+    doesn't count as converged. Requiring 1/3 from *each* member (not
+    just a combined majority) rules out one side dominating while the
+    other is barely represented. Replicates from all three sweeps are
+    pooled together at each `mutation_rate` (see the Data section
+    above).
 
     With `N_SITES=4` there are five Hamming-weight classes drawn from
     the sixteen possible genomes, grouped into four outcomes:
 
-    - **founder strain (0000/1111)**: Hamming weights `0` and `4`,
-      i.e. the all-zero founder/wildtype genome and its bitwise
-      complement (`hw in {0, 4}`, 2 of the 16 genomes).
-    - **HW 1/3 complements**: Hamming weights `1` and `3`, the one-
-      and three-mutation classes that are bitwise complements of one
-      another (`hw in {1, 3}`, 8 of the 16 genomes).
-    - **HW 2**: Hamming weight `2`, the remaining two-mutation class
-      (`hw == 2`, 6 of the 16 genomes). Unlike the other two groups
-      this one isn't a complement pair --- e.g. `1100` and `0011` are
-      each other's complements, but both land in `hw == 2` --- it's
-      just every genome not already claimed by founder or HW 1/3.
-    - **not converged**: no single Hamming-weight class holds at least
-      90% of the replicate's final-step case count (`dom_frac < 0.9`).
-      `dom_frac` is sharply bimodal across this combined dataset ---
-      either roughly `0.35`-`0.5` (still split across several classes)
-      or `>= 0.99` (essentially fixed) --- with almost no replicates in
-      between, so 90% sits cleanly in that gap rather than being an
-      arbitrary cutoff.
+    - **founder strain (0000/1111)**: both `hw=0` and `hw=4` --- the
+      all-zero founder/wildtype genome and its bitwise complement,
+      each a single genome --- individually hold >= 1/3 of cases.
+    - **HW 1/3**: both `hw=1` and `hw=3` --- the one- and
+      three-mutation classes, bitwise complements of one another ---
+      individually hold >= 1/3 of cases. Each bin spans 4 genomes
+      rather than 1, so this confirms *some* hw=1/hw=3 complement pair
+      is jointly well-represented, without pinning down which specific
+      pair (that would need per-genome data).
+    - **HW 2**: `hw == 2` alone holds >= 2/3 of cases --- the
+      combined-pair threshold (2 x 1/3) applied to the single bin,
+      since `hw == 2` isn't a two-way complement split like the other
+      groups (e.g. `1100` and `0011` are complements of each other,
+      but both land in `hw == 2`, alongside two other complement pairs
+      the aggregated bin can't distinguish without per-genome data).
+    - **not converged**: none of the above thresholds are met.
 
     We classify each replicate's end-state into one of these four
     categories, then ask how the **probability of each outcome**
@@ -262,43 +260,42 @@ def delimit_outcome(mo):
 @app.cell
 def compute_outcome(hw_df):
     _n_sites = int(hw_df["n_sites"].iloc[0])
-    # A replicate hasn't reached a definite outcome once no single
-    # Hamming-weight class holds at least 90% of its final-step case
-    # count --- see the "not converged" rationale above.
-    _CONVERGED_THRESHOLD = 0.9
+    # Converged on a complement pair requires each member of that pair
+    # to individually hold >= 1/3 of the replicate's total final-step
+    # cases; HW 2 isn't a two-way split, so its bar is 2 x 1/3 applied
+    # to the single bin --- see the rationale in delimit_outcome above.
+    _PAIR_THRESHOLD = 1 / 3
 
-    # hw_df already holds one row per (replicate_uid, hw) at each
-    # replicate's final step (filtered upstream in load_data), so the
-    # dominant Hamming-weight class per replicate is just the hw with
-    # the largest n_cases, and dom_frac is that hw's share of the
-    # replicate's total case count.
-    _grouped = hw_df.groupby("replicate_uid")["n_cases"]
-    _dom_frac = _grouped.max() / _grouped.sum()
-    _dom_idx = _grouped.idxmax()
-    outcome_df = hw_df.loc[
-        _dom_idx,
-        ["replicate_uid", "mutation_rate", "hw"],
-    ].copy()
-    outcome_df["dom_frac"] = outcome_df["replicate_uid"].map(_dom_frac)
-
-    # Founder strain (0000/1111) == extreme Hamming weights {0, N_SITES};
-    # HW 1/3 == the complement pair; HW 2 == everything else (not itself
-    # a complement pair --- see delimit_outcome above).
-    def _classify(_row):
-        if _row["dom_frac"] < _CONVERGED_THRESHOLD:
-            return "not converged"
-        if _row["hw"] in (0, _n_sites):
-            return "founder (0000/1111)"
-        if _row["hw"] == _n_sites // 2:
-            return "HW 2"
-        return "HW 1/3 (complements)"
-
-    outcome_df["group"] = outcome_df.apply(_classify, axis=1)
-    print(f"outcome frame: {outcome_df.shape}")
-    print(
-        "dominant hw class counts:\n"
-        + str(outcome_df["hw"].value_counts().sort_index()),
+    _pivot = hw_df.pivot_table(
+        index="replicate_uid",
+        columns="hw",
+        values="n_cases",
+        aggfunc="sum",
+        fill_value=0,
     )
+    _total = _pivot.sum(axis=1)
+    _frac0 = _pivot[0] / _total
+    _frac1 = _pivot[1] / _total
+    _frac2 = _pivot[_n_sites // 2] / _total
+    _frac3 = _pivot[_n_sites - 1] / _total
+    _frac4 = _pivot[_n_sites] / _total
+
+    def _classify(_uid):
+        if _frac0[_uid] >= _PAIR_THRESHOLD and _frac4[_uid] >= _PAIR_THRESHOLD:
+            return "founder (0000/1111)"
+        if _frac1[_uid] >= _PAIR_THRESHOLD and _frac3[_uid] >= _PAIR_THRESHOLD:
+            return "HW 1/3"
+        if _frac2[_uid] >= 2 * _PAIR_THRESHOLD:
+            return "HW 2"
+        return "not converged"
+
+    outcome_df = (
+        hw_df[["replicate_uid", "mutation_rate"]]
+        .drop_duplicates("replicate_uid")
+        .copy()
+    )
+    outcome_df["group"] = outcome_df["replicate_uid"].map(_classify)
+    print(f"outcome frame: {outcome_df.shape}")
     print(
         "group counts:\n" + str(outcome_df["group"].value_counts()),
     )
@@ -334,7 +331,7 @@ def delimit_stats(mo):
 def compute_stats(outcome_df, pd, sps):
     _groups = [
         "founder (0000/1111)",
-        "HW 1/3 (complements)",
+        "HW 1/3",
         "HW 2",
         "not converged",
     ]
@@ -384,7 +381,7 @@ def delimit_plot(mo):
     each get a color-matched dashed **horizontal chance-expectation
     rule**, at the genome-count fraction of the 16 possible 4-site
     genomes they cover: **12.5%** for founder (0000/1111, 2 genomes),
-    **50%** for HW 1/3 complements (8 genomes), and **37.5%** for HW 2
+    **50%** for HW 1/3 (8 genomes), and **37.5%** for HW 2
     (6 genomes) --- all under a uniform-over-genomes null. "not
     converged" has no genome-identity analog (it's about whether any
     class dominates at all, not which one), so it gets no chance line.
@@ -398,7 +395,7 @@ def delimit_plot(mo):
 def plot_fixation(pathlib, sns, summary_df, tp):
     _groups = [
         "founder (0000/1111)",
-        "HW 1/3 (complements)",
+        "HW 1/3",
         "HW 2",
         "not converged",
     ]
@@ -412,7 +409,7 @@ def plot_fixation(pathlib, sns, summary_df, tp):
     # it's intentionally absent here and gets no chance line below.
     _chance = {
         "founder (0000/1111)": 2 / 16,
-        "HW 1/3 (complements)": 8 / 16,
+        "HW 1/3": 8 / 16,
         "HW 2": 6 / 16,
     }
 
