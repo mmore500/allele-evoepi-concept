@@ -54,12 +54,12 @@ def delimit_data(mo):
     ## Data
 
     Load the per-replicate Hamming-weight **end-state** table for the
-    4-site mutation-rate sweep, combining two complementary slurm jobs
-    (both driven by notebook `bindle/2026-05-20-founder.py`, fixing
-    `N_SITES=4` and `POP_SIZE=1,000,000` on CPU, engine=numpy) that
-    together span the swept range:
+    4-site mutation-rate sweep, combining three slurm jobs (all driven
+    by notebook `bindle/2026-05-20-founder.py`, fixing `N_SITES=4` and
+    `POP_SIZE=1,000,000` on CPU, engine=numpy) that together cover the
+    swept range at two different equilibration depths:
 
-    - **deep / low-rate** sweep
+    - **deep** sweep
       (`slurm/2026-08-26/2026-08-26-4site-mutation-sweep.sh`, OSF
       https://osf.io/96r2v): `MUTATION_RATE` from `1e-5` down to
       `3e-11` (~2 points per decade, 12 conditions planned), 25
@@ -68,38 +68,50 @@ def delimit_data(mo):
       (`slurm/2026-08-29/2026-08-29-4site-mutation-sweep.sh`, OSF
       https://osf.io/m6hzn): `MUTATION_RATE` from `1e-1` down to
       `3e-6` (~2 points per decade, 10 conditions), 200 replicates per
-      condition (2000 planned), **`N_STEPS=5,000`** (dynamics saturate
-      quickly at these higher rates, so a much shorter run suffices).
+      condition (2000 planned), **`N_STEPS=5,000`**.
+    - **wide / low-rate** sweep
+      (`slurm/2026-08-30/2026-08-30-4site-mutation-sweep.sh`, OSF
+      https://osf.io/buz8e): `MUTATION_RATE` from `1e-6` down to
+      `3e-11` (10 conditions), 200 replicates per condition (2000
+      planned), **`N_STEPS=5,000`**, seeded from 201 to avoid
+      replicate-uid collisions with the other two sweeps.
 
-    The two jobs are designed to abut at `1e-5`/`3e-6` with no overlap,
-    and in this data snapshot they don't actually overlap (the deep
-    sweep hasn't yet produced replicates at those two shared rungs) ---
-    but if it later does, watch the `mutation_rate x n_steps x
-    replicate counts` diagnostic printed below: replicates sharing a
-    `mutation_rate` but differing `n_steps` come from different
-    equilibration depths and shouldn't be treated as directly
-    comparable.
+    Both wide sweeps use a much shorter run than the deep sweep because
+    dynamics saturate quickly relative to `N_STEPS=150,000`; they trade
+    that depth for ~8x the replicate count, deliberately **duplicating**
+    the deep sweep's rate range rather than avoiding it, to get a
+    larger-N shallow estimate at the same conditions. The wide/low-rate
+    sweep's 10 rungs (`1e-6` .. `3e-11`) fully overlap the deep sweep's
+    bottom 10 rungs, so at those `mutation_rate` values this notebook
+    holds replicates from **two different equilibration depths**
+    (150,000 vs. 5,000 steps) that are not directly comparable --- the
+    `mutation_rate x n_steps x replicate counts` diagnostic printed
+    below shows exactly where that overlap falls, and every downstream
+    cell groups by `(mutation_rate, n_steps)` rather than
+    `mutation_rate` alone, keeping the two depths as separate series
+    (see the `n_steps`-styled lines in the plot below) instead of
+    blending them into one estimate.
 
     The deep sweep was still in flight when this notebook was written:
     not every planned condition has completed replicates yet, and
     completed conditions can have far fewer than 25 replicates apiece.
-    The wide sweep is essentially complete (200 replicates at every
-    condition except `3e-4`, which has 180). Treat the deep sweep's
-    confidence intervals as provisional accordingly (they should
-    tighten, and any missing conditions fill in, as the sweep
-    continues and its OSF file is refreshed).
+    Both wide sweeps are essentially complete (200 replicates at every
+    condition, except the high-rate sweep's `3e-4`, which has 180).
+    Treat the deep sweep's confidence intervals as provisional
+    accordingly (they should tighten, and any missing conditions fill
+    in, as the sweep continues and its OSF file is refreshed).
 
-    Unlike the smaller companion sweeps, both OSF files back this
-    notebook as **full per-step trajectory tables** (one row per
-    `(replicate_uid, Step, hw)`) rather than pre-filtered end-state
-    exports, so loading either wholesale with `pandas` risks
-    exhausting memory. Instead, each file's final-step filter
-    (`Step == max(Step)`, computed per file since `N_STEPS` differs
-    between them) is pushed down through `pyarrow.dataset` before
-    materializing to `pandas` and concatenating, since every completed
-    replicate is recorded densely for every step (no checkpointing).
+    All three OSF files back this notebook as **full per-step
+    trajectory tables** (one row per `(replicate_uid, Step, hw)`)
+    rather than pre-filtered end-state exports, so loading any of them
+    wholesale with `pandas` risks exhausting memory. Instead, each
+    file's final-step filter (`Step == max(Step)`, computed per file
+    since `N_STEPS` differs between the deep and wide sweeps) is
+    pushed down through `pyarrow.dataset` before materializing to
+    `pandas` and concatenating, since every completed replicate is
+    recorded densely for every step (no checkpointing).
 
-    Both OSF files are downloaded with `requests` and cached at
+    All three OSF files are downloaded with `requests` and cached at
     `/tmp/<slug>` so re-runs hit the local copies.
     """)
     return
@@ -107,35 +119,30 @@ def delimit_data(mo):
 
 @app.cell
 def configure_args(mo):
-    # CLI args. Defaults pull the two 4-site mutation-sweep hw parquets
-    # that back this notebook: the deep low-rate sweep (OSF
-    # https://osf.io/96r2v) and the wide high-rate sweep (OSF
-    # https://osf.io/m6hzn) --- see the Data section above.
+    # CLI args. Defaults pull the three 4-site mutation-sweep hw
+    # parquets that back this notebook: deep (OSF https://osf.io/96r2v),
+    # wide/high-rate (OSF https://osf.io/m6hzn), and wide/low-rate (OSF
+    # https://osf.io/buz8e) --- see the Data section above.
     _args = mo.cli_args()
-    OSF_SLUG_DEEP = str(_args.get("osf-slug-deep") or "96r2v")
-    OSF_URL_DEEP = str(
-        _args.get("osf-url-deep")
-        or f"https://osf.io/{OSF_SLUG_DEEP}/download",
-    )
-    OSF_SLUG_WIDE = str(_args.get("osf-slug-wide") or "m6hzn")
-    OSF_URL_WIDE = str(
-        _args.get("osf-url-wide")
-        or f"https://osf.io/{OSF_SLUG_WIDE}/download",
-    )
-    print(f"args: OSF_SLUG_DEEP={OSF_SLUG_DEEP} OSF_URL_DEEP={OSF_URL_DEEP}")
-    print(f"args: OSF_SLUG_WIDE={OSF_SLUG_WIDE} OSF_URL_WIDE={OSF_URL_WIDE}")
-    return OSF_SLUG_DEEP, OSF_SLUG_WIDE, OSF_URL_DEEP, OSF_URL_WIDE
+    _default_slugs = {
+        "deep": "96r2v",
+        "wide_high": "m6hzn",
+        "wide_low": "buz8e",
+    }
+    OSF_SOURCES = {}
+    for _name, _default_slug in _default_slugs.items():
+        _slug = str(_args.get(f"osf-slug-{_name}") or _default_slug)
+        _url = str(
+            _args.get(f"osf-url-{_name}")
+            or f"https://osf.io/{_slug}/download",
+        )
+        OSF_SOURCES[_name] = (_slug, _url)
+        print(f"args: OSF_SLUG_{_name}={_slug} OSF_URL_{_name}={_url}")
+    return (OSF_SOURCES,)
 
 
 @app.cell
-def download_data(
-    OSF_SLUG_DEEP,
-    OSF_SLUG_WIDE,
-    OSF_URL_DEEP,
-    OSF_URL_WIDE,
-    pathlib,
-    requests,
-):
+def download_data(OSF_SOURCES, pathlib, requests):
     def _download(slug, url):
         cache_path = pathlib.Path("/tmp") / slug
         if not cache_path.exists():
@@ -148,13 +155,15 @@ def download_data(
         print(f"size: {cache_path.stat().st_size} bytes")
         return cache_path
 
-    cache_path_deep = _download(OSF_SLUG_DEEP, OSF_URL_DEEP)
-    cache_path_wide = _download(OSF_SLUG_WIDE, OSF_URL_WIDE)
-    return cache_path_deep, cache_path_wide
+    cache_paths = {
+        _name: _download(_slug, _url)
+        for _name, (_slug, _url) in OSF_SOURCES.items()
+    }
+    return (cache_paths,)
 
 
 @app.cell
-def load_data(cache_path_deep, cache_path_wide, ds, pc, pd):
+def load_data(cache_paths, ds, pc, pd):
     def _load_final_step(cache_path):
         # Each parquet is the full per-step trajectory table for its
         # sweep, so avoid pd.read_parquet(cache_path) --- loading every
@@ -183,10 +192,7 @@ def load_data(cache_path_deep, cache_path_wide, ds, pc, pd):
         ).to_pandas()
 
     hw_df = pd.concat(
-        [
-            _load_final_step(cache_path_deep),
-            _load_final_step(cache_path_wide),
-        ],
+        [_load_final_step(_p) for _p in cache_paths.values()],
         ignore_index=True,
     )
     print(f"loaded hw end-state dataframe: {hw_df.shape}")
@@ -247,7 +253,7 @@ def compute_outcome(hw_df):
     _dom_idx = hw_df.groupby("replicate_uid")["n_cases"].idxmax()
     outcome_df = hw_df.loc[
         _dom_idx,
-        ["replicate_uid", "mutation_rate", "hw"],
+        ["replicate_uid", "mutation_rate", "n_steps", "hw"],
     ].copy()
 
     # Founder strain (0000/1111) == extreme Hamming weights {0, N_SITES};
@@ -278,17 +284,21 @@ def delimit_stats(mo):
 
     Each replicate's dominant-class label is one of three mutually
     exclusive, collectively exhaustive outcomes, so for each
-    `mutation_rate` the "class X fixes vs. it doesn't" indicator is a
-    Bernoulli trial per replicate and the per-condition fraction is a
-    **binomial proportion**. We summarize each of the three group
-    proportions independently with the **exact Clopper-Pearson
-    interval** via `scipy.stats.binomtest(k, n).proportion_ci(
-    method="exact")` --- an exact estimator CI inverted from the
-    binomial CDF, **not** a bootstrap.
+    `(mutation_rate, n_steps)` condition the "class X fixes vs. it
+    doesn't" indicator is a Bernoulli trial per replicate and the
+    per-condition fraction is a **binomial proportion**. Conditions are
+    grouped by `n_steps` as well as `mutation_rate` --- not
+    `mutation_rate` alone --- since the deep and wide sweeps overlap at
+    several rates but ran to different depths (150,000 vs. 5,000
+    steps) and shouldn't be pooled into one proportion. We summarize
+    each of the three group proportions independently with the **exact
+    Clopper-Pearson interval** via `scipy.stats.binomtest(k,
+    n).proportion_ci(method="exact")` --- an exact estimator CI
+    inverted from the binomial CDF, **not** a bootstrap.
     Per-condition replicate counts in this sweep snapshot are uneven
-    and can be as low as single digits (vs. the planned 25), so expect
-    some of these intervals --- especially at the sparser conditions
-    --- to be wide.
+    and can be as low as single digits for the deep sweep (vs. its
+    planned 25), so expect some of those intervals --- especially at
+    the sparser conditions --- to be wide.
     """)
     return
 
@@ -301,7 +311,9 @@ def compute_stats(outcome_df, pd, sps):
         "HW 2 (self-complementary)",
     ]
     _rows = []
-    for _mr, _sub in outcome_df.groupby("mutation_rate"):
+    for (_mr, _steps), _sub in outcome_df.groupby(
+        ["mutation_rate", "n_steps"],
+    ):
         _n = len(_sub)
         _counts = _sub["group"].value_counts()
         for _group in _groups:
@@ -313,6 +325,7 @@ def compute_stats(outcome_df, pd, sps):
             _rows.append(
                 {
                     "mutation_rate": float(_mr),
+                    "n_steps": int(_steps),
                     "group": _group,
                     "n_fixed": _k,
                     "n_total": _n,
@@ -325,7 +338,7 @@ def compute_stats(outcome_df, pd, sps):
     summary_df = (
         pd.DataFrame(_rows)
         .sort_values(
-            ["group", "mutation_rate"],
+            ["group", "n_steps", "mutation_rate"],
         )
         .reset_index(drop=True)
     )
@@ -340,12 +353,16 @@ def delimit_plot(mo):
 
     `seaborn` lineplot of the per-condition fixation probability
     against `mutation_rate` on a **log x-axis**, one line per outcome
-    group. The shaded **band shows the exact (Clopper-Pearson) 95%
-    confidence interval** computed above (seaborn's own bootstrap CI
-    is disabled via `errorbar=None`; the band is drawn from the exact
-    estimator). Each group gets its own color-matched dashed
-    **horizontal chance-expectation rule**, at the genome-count fraction
-    of the 16 possible 4-site genomes it covers: **12.5%** for founder
+    group **and** per `n_steps` depth (solid vs. dashed line style,
+    since at several `mutation_rate` rungs the deep and wide sweeps
+    both contribute a series --- see the Data section above --- and
+    those two depths are kept visually distinct rather than merged).
+    The shaded **band shows the exact (Clopper-Pearson) 95% confidence
+    interval** computed above (seaborn's own bootstrap CI is disabled
+    via `errorbar=None`; the band is drawn from the exact estimator).
+    Each group gets its own color-matched dashed **horizontal
+    chance-expectation rule**, at the genome-count fraction of the 16
+    possible 4-site genomes it covers: **12.5%** for founder
     (0000/1111, 2 genomes), **50%** for HW 1/3 complements (8 genomes),
     and **37.5%** for HW 2 self-complementary (6 genomes) --- all under
     a uniform-over-genomes null. Gaps along the x-axis reflect
@@ -375,6 +392,8 @@ def plot_fixation(pathlib, sns, summary_df, tp):
         "HW 2 (self-complementary)": 6 / 16,
     }
 
+    _steps_order = sorted(summary_df["n_steps"].unique(), reverse=True)
+
     with tp.teed(
         sns.lineplot,
         data=summary_df,
@@ -382,6 +401,8 @@ def plot_fixation(pathlib, sns, summary_df, tp):
         y="p",
         hue="group",
         hue_order=_groups,
+        style="n_steps",
+        style_order=_steps_order,
         palette=_palette,
         marker="o",
         errorbar=None,
@@ -389,19 +410,25 @@ def plot_fixation(pathlib, sns, summary_df, tp):
         teeplot_show=True,
         teeplot_subdir=pathlib.Path(__file__).stem,
     ) as _ax:
-        # Exact-CI band per group (fill_between, not bootstrap).
+        # Exact-CI band per (group, n_steps) series (fill_between, not
+        # bootstrap) --- kept separate since the two depths shouldn't
+        # be pooled (see Data section).
         for _group in _groups:
-            _sub = summary_df[summary_df["group"] == _group].sort_values(
-                "mutation_rate",
-            )
-            _ax.fill_between(
-                _sub["mutation_rate"],
-                _sub["ci_low"],
-                _sub["ci_high"],
-                color=_palette[_group],
-                alpha=0.2,
-                linewidth=0,
-            )
+            for _steps in _steps_order:
+                _sub = summary_df[
+                    (summary_df["group"] == _group)
+                    & (summary_df["n_steps"] == _steps)
+                ].sort_values("mutation_rate")
+                if _sub.empty:
+                    continue
+                _ax.fill_between(
+                    _sub["mutation_rate"],
+                    _sub["ci_low"],
+                    _sub["ci_high"],
+                    color=_palette[_group],
+                    alpha=0.2,
+                    linewidth=0,
+                )
         # Color-matched chance-expectation rule per group.
         for _group in _groups:
             _ax.axhline(
@@ -431,9 +458,10 @@ def delimit_table(mo):
     mo.md("""
     ## Probability & 95% CI Table
 
-    Per-`mutation_rate` fixation probability with the exact
-    Clopper-Pearson 95% confidence interval, for both outcome groups.
-    `n_fixed` / `n_total` are the binomial counts behind each estimate.
+    Per-`(mutation_rate, n_steps)` fixation probability with the exact
+    Clopper-Pearson 95% confidence interval, for all three outcome
+    groups. `n_fixed` / `n_total` are the binomial counts behind each
+    estimate.
     """)
     return
 
@@ -452,6 +480,7 @@ def show_table(mo, summary_df):
         )[
             [
                 "group",
+                "n_steps",
                 "mutation_rate",
                 "n_fixed",
                 "n_total",
@@ -461,7 +490,7 @@ def show_table(mo, summary_df):
                 "ci_95",
             ]
         ]
-        .sort_values(["group", "mutation_rate"])
+        .sort_values(["group", "n_steps", "mutation_rate"])
         .reset_index(drop=True)
     )
 
