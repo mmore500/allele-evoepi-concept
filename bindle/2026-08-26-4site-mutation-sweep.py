@@ -84,14 +84,15 @@ def delimit_data(mo):
     larger-N shallow estimate at the same conditions. The wide/low-rate
     sweep's 10 rungs (`1e-6` .. `3e-11`) fully overlap the deep sweep's
     bottom 10 rungs, so at those `mutation_rate` values this notebook
-    holds replicates from **two different equilibration depths**
-    (150,000 vs. 5,000 steps) that are not directly comparable --- the
-    `mutation_rate x n_steps x replicate counts` diagnostic printed
-    below shows exactly where that overlap falls, and every downstream
-    cell groups by `(mutation_rate, n_steps)` rather than
-    `mutation_rate` alone, keeping the two depths as separate series
-    (see the `n_steps`-styled lines in the plot below) instead of
-    blending them into one estimate.
+    pools replicates from **two different equilibration depths**
+    (150,000 vs. 5,000 steps) --- the `mutation_rate x n_steps x
+    replicate counts` diagnostic printed below shows exactly where
+    that overlap falls. Rather than keeping the two depths as separate
+    series, a replicate that hasn't actually settled on an outcome by
+    its final step is instead captured directly as its own **"not
+    converged"** group in the outcome classification below, so a
+    shallow run's under-equilibration shows up as a probability rather
+    than being silently averaged away or requiring a second series.
 
     The deep sweep was still in flight when this notebook was written:
     not every planned condition has completed replicates yet, and
@@ -219,10 +220,17 @@ def delimit_outcome(mo):
     at its final simulation step by case count (`n_cases`) --- the
     Hamming-weight bin that has "fixed" as the most-populous strain
     cluster at end-state, following the coarse strain identifier used
-    in the founder-convergence analyses.
+    in the founder-convergence analyses. Replicates from all three
+    sweeps are pooled together at each `mutation_rate` (see the Data
+    section above): a replicate that hasn't actually settled on an
+    outcome by its final step --- disproportionately likely among the
+    wide sweeps' shallower `N_STEPS=5,000` runs --- falls into its own
+    **"not converged"** group below rather than being forced into a
+    class it hasn't really reached, or requiring a separate depth-based
+    series.
 
     With `N_SITES=4` there are five Hamming-weight classes drawn from
-    the sixteen possible genomes:
+    the sixteen possible genomes, grouped into four outcomes:
 
     - **founder strain (0000/1111)**: Hamming weights `0` and `4`,
       i.e. the all-zero founder/wildtype genome and its bitwise
@@ -230,16 +238,25 @@ def delimit_outcome(mo):
     - **HW 1/3 complements**: Hamming weights `1` and `3`, the one-
       and three-mutation classes that are bitwise complements of one
       another (`hw in {1, 3}`, 8 of the 16 genomes).
-    - **HW 2 self-complementary**: Hamming weight `2`, the
-      two-mutation class that is its own bitwise complement (`hw == 2`,
-      the remaining 6 of the 16 genomes).
+    - **HW 2**: Hamming weight `2`, the remaining two-mutation class
+      (`hw == 2`, 6 of the 16 genomes). Unlike the other two groups
+      this one isn't a complement pair --- e.g. `1100` and `0011` are
+      each other's complements, but both land in `hw == 2` --- it's
+      just every genome not already claimed by founder or HW 1/3.
+    - **not converged**: no single Hamming-weight class holds at least
+      90% of the replicate's final-step case count (`dom_frac < 0.9`).
+      `dom_frac` is sharply bimodal across this combined dataset ---
+      either roughly `0.35`-`0.5` (still split across several classes)
+      or `>= 0.99` (essentially fixed) --- with almost no replicates in
+      between, so 90% sits cleanly in that gap rather than being an
+      arbitrary cutoff.
 
-    We classify each replicate's end-state into one of these three
-    categories, then ask how the **fixation probability of each
-    class** depends on the swept `mutation_rate`. Splitting HW 1/3 from
-    HW 2 (rather than lumping all of `hw in {1, 2, 3}` together, as the
+    We classify each replicate's end-state into one of these four
+    categories, then ask how the **probability of each outcome**
+    depends on the swept `mutation_rate`. Splitting HW 1/3 from HW 2
+    (rather than lumping all of `hw in {1, 2, 3}` together, as the
     2-/3-site companion notebooks do) matters here because the two
-    classes carry different genome counts (8 vs. 6 of 16) and thus
+    groups carry different genome counts (8 vs. 6 of 16) and thus
     different chance baselines.
     """
     )
@@ -249,27 +266,38 @@ def delimit_outcome(mo):
 @app.cell
 def compute_outcome(hw_df):
     _n_sites = int(hw_df["n_sites"].iloc[0])
+    # A replicate hasn't reached a definite outcome once no single
+    # Hamming-weight class holds at least 90% of its final-step case
+    # count --- see the "not converged" rationale above.
+    _CONVERGED_THRESHOLD = 0.9
 
     # hw_df already holds one row per (replicate_uid, hw) at each
     # replicate's final step (filtered upstream in load_data), so the
     # dominant Hamming-weight class per replicate is just the hw with
-    # the largest n_cases.
-    _dom_idx = hw_df.groupby("replicate_uid")["n_cases"].idxmax()
+    # the largest n_cases, and dom_frac is that hw's share of the
+    # replicate's total case count.
+    _grouped = hw_df.groupby("replicate_uid")["n_cases"]
+    _dom_frac = _grouped.max() / _grouped.sum()
+    _dom_idx = _grouped.idxmax()
     outcome_df = hw_df.loc[
         _dom_idx,
-        ["replicate_uid", "mutation_rate", "n_steps", "hw"],
+        ["replicate_uid", "mutation_rate", "hw"],
     ].copy()
+    outcome_df["dom_frac"] = outcome_df["replicate_uid"].map(_dom_frac)
 
     # Founder strain (0000/1111) == extreme Hamming weights {0, N_SITES};
-    # HW 2 == the self-complementary middle weight (N_SITES / 2); the
-    # remaining weights are the HW 1/3 complement pair.
-    outcome_df["group"] = outcome_df["hw"].map(
-        lambda _hw: "founder (0000/1111)"
-        if _hw in (0, _n_sites)
-        else "HW 2 (self-complementary)"
-        if _hw == _n_sites // 2
-        else "HW 1/3 (complements)",
-    )
+    # HW 1/3 == the complement pair; HW 2 == everything else (not itself
+    # a complement pair --- see delimit_outcome above).
+    def _classify(_row):
+        if _row["dom_frac"] < _CONVERGED_THRESHOLD:
+            return "not converged"
+        if _row["hw"] in (0, _n_sites):
+            return "founder (0000/1111)"
+        if _row["hw"] == _n_sites // 2:
+            return "HW 2"
+        return "HW 1/3 (complements)"
+
+    outcome_df["group"] = outcome_df.apply(_classify, axis=1)
     print(f"outcome frame: {outcome_df.shape}")
     print(
         "dominant hw class counts:\n"
@@ -287,23 +315,22 @@ def delimit_stats(mo):
         """
     ## Exact (Clopper-Pearson) 95% Confidence Intervals
 
-    Each replicate's dominant-class label is one of three mutually
-    exclusive, collectively exhaustive outcomes, so for each
-    `(mutation_rate, n_steps)` condition the "class X fixes vs. it
-    doesn't" indicator is a Bernoulli trial per replicate and the
-    per-condition fraction is a **binomial proportion**. Conditions are
-    grouped by `n_steps` as well as `mutation_rate` --- not
-    `mutation_rate` alone --- since the deep and wide sweeps overlap at
-    several rates but ran to different depths (150,000 vs. 5,000
-    steps) and shouldn't be pooled into one proportion. We summarize
-    each of the three group proportions independently with the **exact
+    Each replicate's outcome label is one of four mutually exclusive,
+    collectively exhaustive categories, so for each `mutation_rate` the
+    "outcome X vs. not" indicator is a Bernoulli trial per replicate
+    and the per-condition fraction is a **binomial proportion**.
+    Replicates are pooled across all three sweeps at each
+    `mutation_rate` regardless of `n_steps` (see the Data and Fixation
+    Outcome sections above for how the differing equilibration depths
+    are instead surfaced via the "not converged" group). We summarize
+    each of the four group proportions independently with the **exact
     Clopper-Pearson interval** via `scipy.stats.binomtest(k,
     n).proportion_ci(method="exact")` --- an exact estimator CI
     inverted from the binomial CDF, **not** a bootstrap.
-    Per-condition replicate counts in this sweep snapshot are uneven
-    and can be as low as single digits for the deep sweep (vs. its
-    planned 25), so expect some of those intervals --- especially at
-    the sparser conditions --- to be wide.
+    Per-condition replicate counts in this combined dataset are uneven
+    and can be as low as single digits for the deep sweep's sparser
+    conditions (vs. its planned 25), up to 200 for the wide sweeps, so
+    expect some intervals to be wide.
     """
     )
     return
@@ -314,12 +341,11 @@ def compute_stats(outcome_df, pd, sps):
     _groups = [
         "founder (0000/1111)",
         "HW 1/3 (complements)",
-        "HW 2 (self-complementary)",
+        "HW 2",
+        "not converged",
     ]
     _rows = []
-    for (_mr, _steps), _sub in outcome_df.groupby(
-        ["mutation_rate", "n_steps"],
-    ):
+    for _mr, _sub in outcome_df.groupby("mutation_rate"):
         _n = len(_sub)
         _counts = _sub["group"].value_counts()
         for _group in _groups:
@@ -331,9 +357,8 @@ def compute_stats(outcome_df, pd, sps):
             _rows.append(
                 {
                     "mutation_rate": float(_mr),
-                    "n_steps": int(_steps),
                     "group": _group,
-                    "n_fixed": _k,
+                    "n_group": _k,
                     "n_total": _n,
                     "p": _k / _n,
                     "ci_low": float(_ci.low),
@@ -343,9 +368,7 @@ def compute_stats(outcome_df, pd, sps):
 
     summary_df = (
         pd.DataFrame(_rows)
-        .sort_values(
-            ["group", "n_steps", "mutation_rate"],
-        )
+        .sort_values(["group", "mutation_rate"])
         .reset_index(drop=True)
     )
     print(summary_df.to_string(index=False))
@@ -358,23 +381,22 @@ def delimit_plot(mo):
         """
     ## Fixation Probability vs. Mutation Rate
 
-    `seaborn` lineplot of the per-condition fixation probability
-    against `mutation_rate` on a **log x-axis**, one line per outcome
-    group **and** per `n_steps` depth (solid vs. dashed line style,
-    since at several `mutation_rate` rungs the deep and wide sweeps
-    both contribute a series --- see the Data section above --- and
-    those two depths are kept visually distinct rather than merged).
-    The shaded **band shows the exact (Clopper-Pearson) 95% confidence
-    interval** computed above (seaborn's own bootstrap CI is disabled
-    via `errorbar=None`; the band is drawn from the exact estimator).
-    Each group gets its own color-matched dashed **horizontal
-    chance-expectation rule**, at the genome-count fraction of the 16
-    possible 4-site genomes it covers: **12.5%** for founder
-    (0000/1111, 2 genomes), **50%** for HW 1/3 complements (8 genomes),
-    and **37.5%** for HW 2 self-complementary (6 genomes) --- all under
-    a uniform-over-genomes null. Gaps along the x-axis reflect
-    mutation-rate conditions with no completed replicates yet in this
-    sweep snapshot.
+    `seaborn` lineplot of the per-condition outcome probability against
+    `mutation_rate` on a **log x-axis**, one line per outcome group
+    (replicates pooled across all three sweeps at each `mutation_rate`
+    --- see the Data section above). The shaded **band shows the exact
+    (Clopper-Pearson) 95% confidence interval** computed above
+    (seaborn's own bootstrap CI is disabled via `errorbar=None`; the
+    band is drawn from the exact estimator). The three fixation groups
+    each get a color-matched dashed **horizontal chance-expectation
+    rule**, at the genome-count fraction of the 16 possible 4-site
+    genomes they cover: **12.5%** for founder (0000/1111, 2 genomes),
+    **50%** for HW 1/3 complements (8 genomes), and **37.5%** for HW 2
+    (6 genomes) --- all under a uniform-over-genomes null. "not
+    converged" has no genome-identity analog (it's about whether any
+    class dominates at all, not which one), so it gets no chance line.
+    Gaps along the x-axis reflect mutation-rate conditions with no
+    completed replicates yet in this sweep snapshot.
     """
     )
     return
@@ -385,22 +407,22 @@ def plot_fixation(pathlib, sns, summary_df, tp):
     _groups = [
         "founder (0000/1111)",
         "HW 1/3 (complements)",
-        "HW 2 (self-complementary)",
+        "HW 2",
+        "not converged",
     ]
     _palette = dict(
         zip(_groups, sns.color_palette("colorblind", n_colors=len(_groups))),
     )
-    # Genome-count fraction of the 16 possible 4-site genomes each group
-    # covers, under a uniform-over-genomes null: founder {0000, 1111}
-    # (2), HW 1/3 complements (2 * C(4,1) = 8), HW 2 self-complementary
-    # (C(4,2) = 6).
+    # Genome-count fraction of the 16 possible 4-site genomes each
+    # fixation group covers, under a uniform-over-genomes null: founder
+    # {0000, 1111} (2), HW 1/3 complements (2 * C(4,1) = 8), HW 2
+    # (C(4,2) = 6). "not converged" has no genome-identity analog, so
+    # it's intentionally absent here and gets no chance line below.
     _chance = {
         "founder (0000/1111)": 2 / 16,
         "HW 1/3 (complements)": 8 / 16,
-        "HW 2 (self-complementary)": 6 / 16,
+        "HW 2": 6 / 16,
     }
-
-    _steps_order = sorted(summary_df["n_steps"].unique(), reverse=True)
 
     with tp.teed(
         sns.lineplot,
@@ -409,36 +431,33 @@ def plot_fixation(pathlib, sns, summary_df, tp):
         y="p",
         hue="group",
         hue_order=_groups,
-        style="n_steps",
-        style_order=_steps_order,
         palette=_palette,
         marker="o",
         errorbar=None,
-        teeplot_outattrs={"a": "founder-vs-hw13-vs-hw2-fixation-prob"},
+        teeplot_outattrs={
+            "a": "founder-vs-hw13-vs-hw2-vs-unconverged-fixation-prob",
+        },
         teeplot_show=True,
         teeplot_subdir=pathlib.Path(__file__).stem,
     ) as _ax:
-        # Exact-CI band per (group, n_steps) series (fill_between, not
-        # bootstrap) --- kept separate since the two depths shouldn't
-        # be pooled (see Data section).
+        # Exact-CI band per group (fill_between, not bootstrap).
         for _group in _groups:
-            for _steps in _steps_order:
-                _sub = summary_df[
-                    (summary_df["group"] == _group)
-                    & (summary_df["n_steps"] == _steps)
-                ].sort_values("mutation_rate")
-                if _sub.empty:
-                    continue
-                _ax.fill_between(
-                    _sub["mutation_rate"],
-                    _sub["ci_low"],
-                    _sub["ci_high"],
-                    color=_palette[_group],
-                    alpha=0.2,
-                    linewidth=0,
-                )
-        # Color-matched chance-expectation rule per group.
+            _sub = summary_df[summary_df["group"] == _group].sort_values(
+                "mutation_rate",
+            )
+            _ax.fill_between(
+                _sub["mutation_rate"],
+                _sub["ci_low"],
+                _sub["ci_high"],
+                color=_palette[_group],
+                alpha=0.2,
+                linewidth=0,
+            )
+        # Color-matched chance-expectation rule per group with a defined
+        # genome-count baseline (skips "not converged").
         for _group in _groups:
+            if _group not in _chance:
+                continue
             _ax.axhline(
                 _chance[_group],
                 color=_palette[_group],
@@ -467,9 +486,9 @@ def delimit_table(mo):
         """
     ## Probability & 95% CI Table
 
-    Per-`(mutation_rate, n_steps)` fixation probability with the exact
-    Clopper-Pearson 95% confidence interval, for all three outcome
-    groups. `n_fixed` / `n_total` are the binomial counts behind each
+    Per-`mutation_rate` outcome probability with the exact
+    Clopper-Pearson 95% confidence interval, for all four outcome
+    groups. `n_group` / `n_total` are the binomial counts behind each
     estimate.
     """
     )
@@ -490,9 +509,8 @@ def show_table(mo, summary_df):
         )[
             [
                 "group",
-                "n_steps",
                 "mutation_rate",
-                "n_fixed",
+                "n_group",
                 "n_total",
                 "p",
                 "ci_low",
@@ -500,7 +518,7 @@ def show_table(mo, summary_df):
                 "ci_95",
             ]
         ]
-        .sort_values(["group", "n_steps", "mutation_rate"])
+        .sort_values(["group", "mutation_rate"])
         .reset_index(drop=True)
     )
 
