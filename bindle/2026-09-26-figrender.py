@@ -173,11 +173,12 @@ def plot_fig3(long_df, mlines, pathlib, sns, tp):
         teeplot_show=True,
         teeplot_subdir=pathlib.Path(__file__).stem,
     ) as g:
-        g.axes_dict["prevalence"].set_ylabel("prevalence")
-        g.axes_dict["susceptibility"].set_ylabel("susceptibility")
+        g.axes_dict["prevalence"].set_ylabel("strain prevalence")
+        g.axes_dict["susceptibility"].set_ylabel("host susceptibility")
         g.axes_dict["susceptibility"].set_xlabel("time")
         g.set_titles("")
         g.figure.set_size_inches(4.6, 2.6)
+        g.figure.subplots_adjust(hspace=0.5)
 
         # Fold the "strain" title into the legend's single row as a
         # label-only dummy entry, rather than a separate title line.
