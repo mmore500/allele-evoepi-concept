@@ -165,6 +165,7 @@ def plot_fig3(long_df, mlines, pathlib, sns, tp):
         style_order=_strain_order,
         dashes=_dashes,
         palette=_palette,
+        linewidth=1.2,
         row="quantity",
         row_order=["prevalence", "susceptibility"],
         kind="line",
