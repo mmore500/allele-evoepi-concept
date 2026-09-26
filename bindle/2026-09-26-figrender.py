@@ -177,6 +177,7 @@ def plot_fig3(long_df, mlines, pathlib, sns, tp):
         g.axes_dict["susceptibility"].set_ylabel("host susceptibility")
         g.axes_dict["susceptibility"].set_xlabel("time")
         g.axes_dict["susceptibility"].set_yticks([0.0, 0.5, 1.0])
+        g.axes_dict["susceptibility"].set_ylim(bottom=0.0)
         g.set_titles("")
         g.figure.set_size_inches(4.6, 2.6)
         g.figure.subplots_adjust(hspace=0.5)
@@ -194,6 +195,9 @@ def plot_fig3(long_df, mlines, pathlib, sns, tp):
             bbox_to_anchor=(0.5, 1.12),
             ncol=len(_labels) + 1,
             frameon=False,
+            handlelength=1.2,
+            handletextpad=0.5,
+            columnspacing=1.0,
         )
     return
 
