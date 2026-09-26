@@ -179,9 +179,9 @@ def plot_fig3(long_df, mcolors, mlines, pathlib, sns, tp):
         teeplot_show=True,
         teeplot_subdir=pathlib.Path(__file__).stem,
     ) as g:
-        g.axes_dict["prevalence"].set_ylabel("strain\nprevalence")
-        g.axes_dict["susceptibility"].set_ylabel("host\nsusceptibility")
-        g.axes_dict["susceptibility"].set_xlabel("time")
+        g.axes_dict["prevalence"].set_ylabel("Strain\nPrevalence")
+        g.axes_dict["susceptibility"].set_ylabel("Host\nSusceptibility")
+        g.axes_dict["susceptibility"].set_xlabel("Time")
         g.axes_dict["susceptibility"].set_yticks([0.0, 0.5, 1.0])
         g.axes_dict["susceptibility"].set_ylim(bottom=0.0)
         g.set_titles("")
@@ -206,11 +206,11 @@ def plot_fig3(long_df, mcolors, mlines, pathlib, sns, tp):
                 # legend key still reads clearly as dotted.
                 _handle.set_linewidth(2.8)
                 _handle.set_dashes([0.8, 1.2])
-        _dummy = mlines.Line2D([], [], linestyle="none", label="strain")
+        _dummy = mlines.Line2D([], [], linestyle="none", label="Strain")
         g.legend.remove()
         g.figure.legend(
             handles=[_dummy, *_handles],
-            labels=["strain", *_labels],
+            labels=["Strain", *_labels],
             loc="upper center",
             bbox_to_anchor=(0.5, 1.09),
             ncol=len(_labels) + 1,
