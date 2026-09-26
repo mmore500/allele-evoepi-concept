@@ -176,6 +176,7 @@ def plot_fig3(long_df, mlines, pathlib, sns, tp):
         g.axes_dict["prevalence"].set_ylabel("strain prevalence")
         g.axes_dict["susceptibility"].set_ylabel("host susceptibility")
         g.axes_dict["susceptibility"].set_xlabel("time")
+        g.axes_dict["susceptibility"].set_yticks([0.0, 0.5, 1.0])
         g.set_titles("")
         g.figure.set_size_inches(4.6, 2.6)
         g.figure.subplots_adjust(hspace=0.5)
