@@ -181,7 +181,7 @@ def plot_fig3(long_df, mlines, pathlib, sns, tp):
         g.axes_dict["susceptibility"].set_ylim(bottom=0.0)
         g.set_titles("")
         g.figure.set_size_inches(4.6, 2.6)
-        g.figure.subplots_adjust(hspace=0.5)
+        g.figure.tight_layout()
 
         # Fold the "strain" title into the legend's single row as a
         # label-only dummy entry, rather than a separate title line.
@@ -193,7 +193,7 @@ def plot_fig3(long_df, mlines, pathlib, sns, tp):
             handles=[_dummy, *_handles],
             labels=["strain", *_labels],
             loc="upper center",
-            bbox_to_anchor=(0.5, 1.12),
+            bbox_to_anchor=(0.5, 1.05),
             ncol=len(_labels) + 1,
             frameon=False,
             handlelength=1.8,
