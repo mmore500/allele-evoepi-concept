@@ -14,13 +14,14 @@ def import_std():
 @app.cell
 def import_pkg():
     import marimo as mo
+    import matplotlib.lines as mlines
     import pandas as pd
     import requests
     import seaborn as sns
     from teeplot import teeplot as tp
     from watermark import watermark
 
-    return mo, pd, requests, sns, tp, watermark
+    return mlines, mo, pd, requests, sns, tp, watermark
 
 
 @app.cell(hide_code=True)
@@ -136,7 +137,7 @@ def prep_long(fig3_df):
 
 
 @app.cell
-def plot_fig3(long_df, pathlib, sns, tp):
+def plot_fig3(long_df, mlines, pathlib, sns, tp):
     _strain_order = ["02", "03", "12", "13"]
     # Okabe-Ito colorblind-safe hues: 02/13 get cool (blue/bluish-green),
     # 03/12 get warm (vermillion/orange).
@@ -177,13 +178,20 @@ def plot_fig3(long_df, pathlib, sns, tp):
         g.axes_dict["susceptibility"].set_xlabel("time")
         g.set_titles("")
         g.figure.set_size_inches(4.6, 2.6)
-        sns.move_legend(
-            g,
-            "upper center",
-            bbox_to_anchor=(0.5, 1.2),
-            ncol=len(_strain_order),
+
+        # Fold the "strain" title into the legend's single row as a
+        # label-only dummy entry, rather than a separate title line.
+        _handles = g.legend.legend_handles
+        _labels = [_t.get_text() for _t in g.legend.get_texts()]
+        _dummy = mlines.Line2D([], [], linestyle="none", label="strain")
+        g.legend.remove()
+        g.figure.legend(
+            handles=[_dummy, *_handles],
+            labels=["strain", *_labels],
+            loc="upper center",
+            bbox_to_anchor=(0.5, 1.12),
+            ncol=len(_labels) + 1,
             frameon=False,
-            title="strain",
         )
     return
 
