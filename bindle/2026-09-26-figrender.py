@@ -138,6 +138,20 @@ def prep_long(fig3_df):
 @app.cell
 def plot_fig3(long_df, pathlib, sns, tp):
     _strain_order = ["02", "03", "12", "13"]
+    # Okabe-Ito colorblind-safe hues: 02/13 get cool (blue/bluish-green),
+    # 03/12 get warm (vermillion/orange).
+    _palette = {
+        "02": "#0072B2",
+        "03": "#D55E00",
+        "12": "#E69F00",
+        "13": "#009E73",
+    }
+    _dashes = {
+        "02": "",
+        "03": "",
+        "12": (4, 1.5),
+        "13": (1, 1),
+    }
 
     with tp.teed(
         sns.relplot,
@@ -146,6 +160,10 @@ def plot_fig3(long_df, pathlib, sns, tp):
         y="value",
         hue="strain",
         hue_order=_strain_order,
+        style="strain",
+        style_order=_strain_order,
+        dashes=_dashes,
+        palette=_palette,
         row="quantity",
         row_order=["prevalence", "susceptibility"],
         kind="line",
@@ -158,14 +176,14 @@ def plot_fig3(long_df, pathlib, sns, tp):
         g.axes_dict["susceptibility"].set_ylabel("susceptibility")
         g.axes_dict["susceptibility"].set_xlabel("time")
         g.set_titles("")
-        g.figure.set_size_inches(3, 4.8)
+        g.figure.set_size_inches(2.8, 2.6)
         sns.move_legend(
             g,
             "upper center",
-            bbox_to_anchor=(0.5, 1.06),
+            bbox_to_anchor=(0.5, 1.2),
             ncol=len(_strain_order),
             frameon=False,
-            title=None,
+            title="strain",
         )
     return
 
