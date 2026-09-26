@@ -14,6 +14,7 @@ def import_std():
 @app.cell
 def import_pkg():
     import marimo as mo
+    import matplotlib
     import matplotlib.lines as mlines
     import pandas as pd
     import requests
@@ -21,7 +22,7 @@ def import_pkg():
     from teeplot import teeplot as tp
     from watermark import watermark
 
-    return mlines, mo, pd, requests, sns, tp, watermark
+    return matplotlib, mlines, mo, pd, requests, sns, tp, watermark
 
 
 @app.cell(hide_code=True)
@@ -137,16 +138,17 @@ def prep_long(fig3_df):
 
 
 @app.cell
-def plot_fig3(long_df, mlines, pathlib, sns, tp):
+def plot_fig3(long_df, matplotlib, mlines, pathlib, sns, tp):
     _strain_order = ["02", "03", "12", "13"]
-    # Okabe-Ito colorblind-safe hues: 02/13 get cool (blue/bluish-green),
-    # 03/12 get warm (vermillion/orange).
-    _palette = {
-        "02": "#0072B2",
-        "03": "#D55E00",
-        "12": "#E69F00",
-        "13": "#009E73",
-    }
+    # Viridis (colorblind-safe, perceptually uniform), sampled by
+    # mutational distance from the founder strain 02: wt is subtlest
+    # (dark), the two single-mutant intermediates (03, 12) step up in
+    # intensity and are spaced far apart for mutual distinctness, and
+    # double-mutant 13 is most intense (brightest).
+    _viridis = matplotlib.colormaps["viridis"]
+    _palette = dict(
+        zip(_strain_order, [_viridis(_t) for _t in (0.08, 0.36, 0.64, 0.92)]),
+    )
     _dashes = {
         "02": "",
         "03": "",
@@ -193,7 +195,7 @@ def plot_fig3(long_df, mlines, pathlib, sns, tp):
             handles=[_dummy, *_handles],
             labels=["strain", *_labels],
             loc="upper center",
-            bbox_to_anchor=(0.5, 1.05),
+            bbox_to_anchor=(0.5, 1.09),
             ncol=len(_labels) + 1,
             frameon=False,
             handlelength=1.8,
