@@ -149,8 +149,8 @@ def plot_fig3(long_df, pathlib, sns, tp):
     _dashes = {
         "02": "",
         "03": "",
-        "12": (4, 1.5),
-        "13": (1, 1),
+        "12": (1, 1),
+        "13": (4, 1.5),
     }
 
     with tp.teed(
