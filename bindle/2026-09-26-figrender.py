@@ -14,7 +14,7 @@ def import_std():
 @app.cell
 def import_pkg():
     import marimo as mo
-    import matplotlib
+    import matplotlib.colors as mcolors
     import matplotlib.lines as mlines
     import pandas as pd
     import requests
@@ -22,7 +22,7 @@ def import_pkg():
     from teeplot import teeplot as tp
     from watermark import watermark
 
-    return matplotlib, mlines, mo, pd, requests, sns, tp, watermark
+    return mcolors, mlines, mo, pd, requests, sns, tp, watermark
 
 
 @app.cell(hide_code=True)
@@ -138,23 +138,26 @@ def prep_long(fig3_df):
 
 
 @app.cell
-def plot_fig3(long_df, matplotlib, mlines, pathlib, sns, tp):
+def plot_fig3(long_df, mcolors, mlines, pathlib, sns, tp):
     _strain_order = ["02", "03", "12", "13"]
-    # Viridis (colorblind-safe, perceptually uniform), sampled by
-    # mutational distance from the founder strain 02: wt is subtlest
-    # (dark), the two single-mutant intermediates (03, 12) step up in
-    # intensity and are spaced far apart for mutual distinctness, and
-    # double-mutant 13 is most intense (brightest).
-    _viridis = matplotlib.colormaps["viridis"]
-    _palette = dict(
-        zip(_strain_order, [_viridis(_t) for _t in (0.08, 0.36, 0.64, 0.92)]),
-    )
+    # Named colors ordered by mutational distance from founder strain
+    # 02: wt is a subdued dark blue-purple, the two single-mutant
+    # intermediates (03, 12) are medium-intensity green/blue, and
+    # double-mutant 13 is the most intense (a warm coral-orange), all
+    # checked for readable contrast against a white background.
+    _palette = {
+        "02": "#373061",
+        "03": "#3cb371",
+        "12": "#1e90ff",
+        "13": "#ff8671",
+    }
     _dashes = {
         "02": "",
         "03": "",
-        "12": (1, 1),
+        "12": (0.8, 2.6),
         "13": (4, 1.5),
     }
+    _dotted_rgb = mcolors.to_rgb(_palette["12"])
 
     with tp.teed(
         sns.relplot,
@@ -182,6 +185,14 @@ def plot_fig3(long_df, matplotlib, mlines, pathlib, sns, tp):
         g.axes_dict["susceptibility"].set_yticks([0.0, 0.5, 1.0])
         g.axes_dict["susceptibility"].set_ylim(bottom=0.0)
         g.set_titles("")
+
+        # Widen 12's dotted line beyond the shared base linewidth so
+        # its sparser dots stay legible.
+        for _ax in g.axes.flat:
+            for _line in _ax.lines:
+                if mcolors.to_rgb(_line.get_color()) == _dotted_rgb:
+                    _line.set_linewidth(2.8)
+
         g.figure.set_size_inches(4.6, 2.6)
         g.figure.tight_layout()
 
@@ -189,6 +200,12 @@ def plot_fig3(long_df, matplotlib, mlines, pathlib, sns, tp):
         # label-only dummy entry, rather than a separate title line.
         _handles = g.legend.legend_handles
         _labels = [_t.get_text() for _t in g.legend.get_texts()]
+        for _handle, _label in zip(_handles, _labels):
+            if _label == "12":
+                # Denser dashes than the plotted line so the short
+                # legend key still reads clearly as dotted.
+                _handle.set_linewidth(2.8)
+                _handle.set_dashes([0.8, 1.2])
         _dummy = mlines.Line2D([], [], linestyle="none", label="strain")
         g.legend.remove()
         g.figure.legend(
