@@ -105,14 +105,13 @@ def delimit_plot(mo):
     mo.md("""
     ## Strain Dynamics Render
 
-    Two panels, sharing a strain color hue but not a y-axis.
-    Left: per-strain prevalence over time, log-scaled so that the
-    intermediate strains' vanishingly-low emergence prevalence stays
-    visible alongside the dominant waves (zero-prevalence stretches,
+    Two panels stacked vertically, sharing a strain color hue and a
+    linear scale.
+    Top: per-strain prevalence over time (zero-prevalence stretches,
     i.e. before a strain has yet mutated into existence, are left as
     gaps).
-    Right: per-strain fraction of the population susceptible to
-    reinfection, on a linear scale.
+    Bottom: per-strain fraction of the population susceptible to
+    reinfection.
     """)
     return
 
@@ -147,27 +146,26 @@ def plot_fig3(long_df, pathlib, sns, tp):
         y="value",
         hue="strain",
         hue_order=_strain_order,
-        col="quantity",
-        col_order=["prevalence", "susceptibility"],
+        row="quantity",
+        row_order=["prevalence", "susceptibility"],
         kind="line",
         facet_kws=dict(sharey=False),
         teeplot_outattrs={"a": "fig3-strain-dynamics"},
         teeplot_show=True,
         teeplot_subdir=pathlib.Path(__file__).stem,
     ) as g:
-        g.axes_dict["prevalence"].set_yscale("log")
-        g.axes_dict["prevalence"].set_ylabel("prevalence (log scale)")
+        g.axes_dict["prevalence"].set_ylabel("prevalence")
         g.axes_dict["susceptibility"].set_ylabel("susceptibility")
-        for _ax in g.axes.flat:
-            _ax.set_xlabel("time")
-        g.set_titles("{col_name}")
-        g.figure.set_size_inches(6, 2.4)
+        g.axes_dict["susceptibility"].set_xlabel("time")
+        g.set_titles("")
+        g.figure.set_size_inches(3, 4.8)
         sns.move_legend(
             g,
-            "center left",
-            bbox_to_anchor=(1.0, 0.5),
+            "upper center",
+            bbox_to_anchor=(0.5, 1.06),
+            ncol=len(_strain_order),
             frameon=False,
-            title="strain",
+            title=None,
         )
     return
 
