@@ -195,9 +195,9 @@ def plot_fig3(long_df, mlines, pathlib, sns, tp):
             bbox_to_anchor=(0.5, 1.12),
             ncol=len(_labels) + 1,
             frameon=False,
-            handlelength=1.2,
-            handletextpad=0.5,
-            columnspacing=1.0,
+            handlelength=1.8,
+            handletextpad=0.6,
+            columnspacing=1.2,
         )
     return
 
