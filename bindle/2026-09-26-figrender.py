@@ -173,8 +173,8 @@ def plot_fig3(long_df, mlines, pathlib, sns, tp):
         teeplot_show=True,
         teeplot_subdir=pathlib.Path(__file__).stem,
     ) as g:
-        g.axes_dict["prevalence"].set_ylabel("strain prevalence")
-        g.axes_dict["susceptibility"].set_ylabel("host susceptibility")
+        g.axes_dict["prevalence"].set_ylabel("strain\nprevalence")
+        g.axes_dict["susceptibility"].set_ylabel("host\nsusceptibility")
         g.axes_dict["susceptibility"].set_xlabel("time")
         g.axes_dict["susceptibility"].set_yticks([0.0, 0.5, 1.0])
         g.axes_dict["susceptibility"].set_ylim(bottom=0.0)
