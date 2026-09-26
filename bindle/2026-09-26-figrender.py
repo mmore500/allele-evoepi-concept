@@ -176,7 +176,7 @@ def plot_fig3(long_df, pathlib, sns, tp):
         g.axes_dict["susceptibility"].set_ylabel("susceptibility")
         g.axes_dict["susceptibility"].set_xlabel("time")
         g.set_titles("")
-        g.figure.set_size_inches(2.8, 2.6)
+        g.figure.set_size_inches(4.6, 2.6)
         sns.move_legend(
             g,
             "upper center",
