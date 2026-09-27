@@ -6,8 +6,8 @@ app = marimo.App(width="full")
 
 @app.cell
 def import_std():
-    import pathlib
     from collections import defaultdict
+    import pathlib
 
     return defaultdict, pathlib
 
@@ -159,7 +159,9 @@ def download_data(DOM_SLUG, EX_SLUG, MAIN_SLUG, download_parquet):
     N_SITES = int(main_df["n_sites"].iloc[0])
     FULL = (1 << N_SITES) - 1  # all-ones strain (complement of wildtype)
     N_STEPS = int(main_df["n_steps"].iloc[0])
-    print(f"main: {main_df.shape}  dominant: {dom_df.shape}  ex: {ex_df.shape}")
+    print(
+        f"main: {main_df.shape}  dominant: {dom_df.shape}  ex: {ex_df.shape}"
+    )
     print(f"N_SITES={N_SITES} FULL={FULL:0{N_SITES}b} N_STEPS={N_STEPS}")
     print(
         "replicates per mutation_rate:\n"
@@ -343,7 +345,9 @@ def def_assemble(
     # for converged runs, plus U for runs that fail to converge. The
     # 000/111 pair (wildtype + all-ones) is outlined green and U red; the
     # remaining pairs get their own distinct outline colors.
-    PAIR_KEYS = [pair_key(s, s ^ FULL) for s in range(FULL + 1) if s <= s ^ FULL]
+    PAIR_KEYS = [
+        pair_key(s, s ^ FULL) for s in range(FULL + 1) if s <= s ^ FULL
+    ]
     _pair_palette = ["green", "#1f77b4", "#ff7f0e", "#9467bd", "#8c564b"]
     END_OUTLINE = {pk: _pair_palette[i] for i, pk in enumerate(PAIR_KEYS)}
     END_OUTLINE["000/111"] = "green"
@@ -352,6 +356,18 @@ def def_assemble(
     def is_end_key(key):
         """Special end node (complement pair or U) vs. transient community."""
         return isinstance(key, str)
+
+    def edge_delta_label(a, b):
+        """Strain-level transition label, e.g. "+100" (introduced) or
+        "-010" (went extinct); "" for transitions into a special end
+        node (complement-pair collapse or non-convergence), which are
+        not single-strain events.
+        """
+        if is_end_key(a) or is_end_key(b):
+            return ""
+        parts = [f"+{binstr(s)}" for s in sorted(b - a)]
+        parts += [f"-{binstr(s)}" for s in sorted(a - b)]
+        return ",".join(parts)
 
     def assemble(uid, rep_df):
         """Build a replicate's transition sequence.
@@ -446,6 +462,7 @@ def def_assemble(
         PAIR_KEYS,
         assemble,
         binstr,
+        edge_delta_label,
         is_end_key,
         node_count_label,
         node_text,
@@ -485,7 +502,10 @@ def delimit_examples(mo):
     node it converged to (`000/111`, `001/110`, `010/101`, `011/100`),
     while a non-converging run terminates in **`U`**. The `000/111` pair
     (wildtype + all-ones) is outlined **green** and `U` is outlined
-    **red**; the other pairs get their own outline colors.
+    **red**; the other pairs get their own outline colors. Edges between
+    transient communities are labelled with the strain that was
+    introduced (`+100`) or went extinct (`-010`) in that transition; the
+    final edge into a special end node is left unlabelled.
     """
     )
     return
@@ -494,6 +514,7 @@ def delimit_examples(mo):
 @app.cell
 def def_plot_path(
     END_OUTLINE,
+    edge_delta_label,
     ig,
     iplotx,
     is_end_key,
@@ -531,10 +552,12 @@ def def_plot_path(
                 vlw.append(1.0)
             vlabel.append(node_count_label(k))
             vsize.append(34.0 if last else 26.0)
+        elabel = [edge_delta_label(keys[i], keys[i + 1]) for i in range(n - 1)]
         iplotx.network(
             g,
             layout=coords,
             vertex_labels=vlabel,
+            edge_labels=elabel,
             ax=ax,
             vertex_facecolor=vface,
             vertex_edgecolor=vedge,
@@ -544,6 +567,8 @@ def def_plot_path(
             edge_color="0.55",
             vertex_label_color="black",
             vertex_label_size=9,
+            edge_label_size=7,
+            edge_label_rotate=False,
             show=False,
         )
         ax.margins(0.15)
@@ -749,9 +774,7 @@ def def_aggregate(defaultdict, is_end_key, path_with_end):
         # Transient community nodes (frozensets) are pruned by occurrence;
         # special end nodes (complement pairs and U) are always kept, as is
         # the 000 founder.
-        keep = {
-            k for k, v in agg["trans_count"].items() if v >= min_count
-        }
+        keep = {k for k, v in agg["trans_count"].items() if v >= min_count}
         keep |= set(agg["end_count"].keys())
         keep.add(frozenset({0}))
         occ_nodes = set(agg["trans_count"]) | set(agg["end_count"])
@@ -869,15 +892,18 @@ def delimit_plot(mo):
     **number on each node is the count of present strains** (the
     complement-pair end nodes hold 2). Special end-node sizes reflect
     end-node occurrence; transient node sizes reflect transient occurrence
-    (separate scales). Edge width encodes transition frequency and each
-    edge label is the 2-digit percentage of its source's outgoing
-    transitions. The `000/111` complement-pair end node is outlined
-    **green** and the non-convergence `U` end node **red**; the remaining
-    pairs carry their own outline colors.
+    (separate scales). Edge width encodes transition frequency. The
+    `000/111` complement-pair end node is outlined **green** and the
+    non-convergence `U` end node **red**; the remaining pairs carry their
+    own outline colors.
 
-    Two versions of each graph are rendered and saved (tagged via
-    `teeplot_outattrs` `edge-labels=pct` vs `edge-labels=none`): one with
-    the edge percentage labels and one with bare arrows.
+    Three versions of each graph are rendered and saved (tagged via
+    `teeplot_outattrs` `edge-labels=pct` vs `edge-labels=delta` vs
+    `edge-labels=none`): one with each edge labelled by the 2-digit
+    percentage of its source's outgoing transitions, one with each edge
+    between transient communities labelled by the strain introduced
+    (`+100`) or gone extinct (`-010`) in that transition (edges into a
+    special end node are left unlabelled), and one with bare arrows.
     """
     )
     return
@@ -895,9 +921,7 @@ def def_layout(defaultdict, is_end_key, np):
         sizes = sorted(x for x in cols if x is not None)
         maxx = max(sizes) if sizes else 1
         for x in sizes:
-            nodes = sorted(
-                cols[x], key=lambda k: (-len(k), tuple(sorted(k)))
-            )
+            nodes = sorted(cols[x], key=lambda k: (-len(k), tuple(sorted(k))))
             n = len(nodes)
             ys = (
                 np.linspace(-(n - 1) / 2.0, (n - 1) / 2.0, n)
@@ -924,6 +948,7 @@ def def_layout(defaultdict, is_end_key, np):
 @app.cell
 def def_plot_mu(
     END_OUTLINE,
+    edge_delta_label,
     ig,
     iplotx,
     is_end_key,
@@ -934,7 +959,9 @@ def def_plot_mu(
     plt,
     sns,
 ):
-    def plot_mu(mu, bundle, ax, legend_ax, palette="husl", edge_labels=True):
+    def plot_mu(
+        mu, bundle, ax, legend_ax, palette="husl", edge_label_mode="pct"
+    ):
         agg = bundle["agg"]
         keep = bundle["keep"]
         kept_edges = bundle["edges"]
@@ -954,20 +981,22 @@ def def_plot_mu(
         # disjoint classes, sized on separate scales.
         end_nodes = {k for k in nodes if is_end_key(k)}
         max_end = max([ec.get(k, 0) for k in end_nodes] + [1])
-        max_tr = max(
-            [tc.get(k, 0) for k in nodes if k not in end_nodes] + [1]
-        )
+        max_tr = max([tc.get(k, 0) for k in nodes if k not in end_nodes] + [1])
 
         g = ig.Graph(directed=True)
         g.add_vertices(len(nodes))
-        elist, ewidth, elabel = [], [], []
+        elist, ewidth, elabel_pct, elabel_delta = [], [], [], []
         max_e = max(kept_edges.values()) if kept_edges else 1
         for (a, b), c in kept_edges.items():
             elist.append((idx[a], idx[b]))
             ewidth.append(1.0 + 4.0 * (c / max_e))
             pct = 100.0 * c / max(agg["out_total"].get(a, c), 1)
-            elabel.append(f"{min(pct, 99):02.0f}%")
+            elabel_pct.append(f"{min(pct, 99):02.0f}%")
+            elabel_delta.append(edge_delta_label(a, b))
         g.add_edges(elist)
+        elabel = {"pct": elabel_pct, "delta": elabel_delta, "none": None}[
+            edge_label_mode
+        ]
 
         colors = sns.color_palette(
             palette,
@@ -995,7 +1024,7 @@ def def_plot_mu(
             g,
             layout=[coords[k] for k in nodes],
             vertex_labels=vlabel,
-            edge_labels=(elabel if edge_labels else None),
+            edge_labels=elabel,
             ax=ax,
             vertex_facecolor=vface,
             vertex_edgecolor=vedge,
@@ -1005,7 +1034,7 @@ def def_plot_mu(
             edge_color="0.55",
             vertex_label_color="black",
             vertex_label_size=8,
-            edge_label_size=6,
+            edge_label_size=7,
             edge_label_rotate=False,
             show=False,
         )
@@ -1065,8 +1094,9 @@ def def_plot_mu(
 
 @app.cell
 def render_graphs(aggregates, mutation_rates, pathlib, plot_mu, plt, tp):
-    # Render two versions per mutation rate: one with the edge percentage
-    # labels and one without (arrows only). teeplot_outattrs tag them apart.
+    # Render three versions per mutation rate: edge percentage labels,
+    # strain-level +/- transition labels, and bare arrows (no labels).
+    # teeplot_outattrs tags them apart.
     for _mu in mutation_rates:
         _bundle = aggregates[_mu]
         _n_nodes = len(_bundle["keep"])
@@ -1078,7 +1108,7 @@ def render_graphs(aggregates, mutation_rates, pathlib, plot_mu, plt, tp):
             )
             return fig, (ax, lax)
 
-        for _edge_labels, _tag in [(True, "pct"), (False, "none")]:
+        for _tag in ("pct", "delta", "none"):
             with tp.teed(
                 _factory,
                 figsize=(14 if _wide else 13, 8.5 if _wide else 7.5),
@@ -1091,7 +1121,7 @@ def render_graphs(aggregates, mutation_rates, pathlib, plot_mu, plt, tp):
                 teeplot_show=True,
                 teeplot_subdir=pathlib.Path(__file__).stem,
             ) as (fig, (ax, lax)):
-                plot_mu(_mu, _bundle, ax, lax, edge_labels=_edge_labels)
+                plot_mu(_mu, _bundle, ax, lax, edge_label_mode=_tag)
     return
 
 
