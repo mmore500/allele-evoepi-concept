@@ -16,13 +16,15 @@ def import_pkg():
     import marimo as mo
     import matplotlib.colors as mcolors
     import matplotlib.lines as mlines
+    import matplotlib.ticker as mticker
+    import numpy as np
     import pandas as pd
     import requests
     import seaborn as sns
     from teeplot import teeplot as tp
     from watermark import watermark
 
-    return mcolors, mlines, mo, pd, requests, sns, tp, watermark
+    return mcolors, mlines, mo, mticker, np, pd, requests, sns, tp, watermark
 
 
 @app.cell(hide_code=True)
@@ -107,13 +109,15 @@ def delimit_plot(mo):
     mo.md("""
     ## Strain Dynamics Render
 
-    Two panels stacked vertically, sharing a strain color hue and a
-    linear scale.
+    Two panels stacked vertically, sharing a strain color hue.
     Top: per-strain prevalence over time (zero-prevalence stretches,
     i.e. before a strain has yet mutated into existence, are left as
-    gaps).
+    gaps), rendered three times with a different y-axis scale each
+    time (symlog, log, and linear) to show the damped oscillations at
+    both the strain-replacement scale and the many-orders-of-magnitude
+    scale of a strain's initial emergence.
     Bottom: per-strain fraction of the population susceptible to
-    reinfection.
+    reinfection, always on a linear scale.
     """)
     return
 
@@ -138,7 +142,7 @@ def prep_long(fig3_df):
 
 
 @app.cell
-def plot_fig3(long_df, mcolors, mlines, pathlib, sns, tp):
+def plot_fig3(long_df, mcolors, mlines, mticker, np, pathlib, sns, tp):
     _strain_order = ["02", "03", "12", "13"]
     # Named colors ordered by mutational distance from founder strain
     # 02: wt is a subdued dark blue-purple, the two single-mutant
@@ -159,66 +163,119 @@ def plot_fig3(long_df, mcolors, mlines, pathlib, sns, tp):
     }
     _dotted_rgb = mcolors.to_rgb(_palette["12"])
 
-    with tp.teed(
-        sns.relplot,
-        data=long_df,
-        x="TIME",
-        y="value",
-        hue="strain",
-        hue_order=_strain_order,
-        style="strain",
-        style_order=_strain_order,
-        dashes=_dashes,
-        palette=_palette,
-        linewidth=1.2,
-        row="quantity",
-        row_order=["prevalence", "susceptibility"],
-        kind="line",
-        facet_kws=dict(sharey=False),
-        teeplot_outattrs={"a": "fig3-strain-dynamics"},
-        teeplot_show=True,
-        teeplot_subdir=pathlib.Path(__file__).stem,
-    ) as g:
-        g.axes_dict["prevalence"].set_ylabel("Strain\nPrevalence")
-        g.axes_dict["susceptibility"].set_ylabel("Host\nSusceptibility")
-        g.axes_dict["susceptibility"].set_xlabel("Time")
-        g.axes_dict["susceptibility"].set_yticks([0.0, 0.5, 1.0])
-        g.axes_dict["susceptibility"].set_ylim(bottom=0.0)
-        g.set_titles("")
+    def _fmt(y, _):
+        if y == 0:
+            return "0"
+        return f"{y:.10f}".rstrip("0").rstrip(".")
 
-        # Widen 12's dotted line beyond the shared base linewidth so
-        # its sparser dots stay legible.
-        for _ax in g.axes.flat:
-            for _line in _ax.lines:
-                if mcolors.to_rgb(_line.get_color()) == _dotted_rgb:
-                    _line.set_linewidth(2.8)
+    for _yscale in ["symlog", "log", "linear"]:
+        with tp.teed(
+            sns.relplot,
+            data=long_df,
+            x="TIME",
+            y="value",
+            hue="strain",
+            hue_order=_strain_order,
+            style="strain",
+            style_order=_strain_order,
+            dashes=_dashes,
+            palette=_palette,
+            linewidth=1.2,
+            row="quantity",
+            row_order=["prevalence", "susceptibility"],
+            kind="line",
+            facet_kws=dict(sharey=False),
+            teeplot_outattrs={
+                "a": "fig3-strain-dynamics",
+                "yscale": _yscale,
+            },
+            teeplot_show=True,
+            teeplot_subdir=pathlib.Path(__file__).stem,
+        ) as g:
+            g.axes_dict["prevalence"].set_ylabel("Strain\nPrevalence")
+            g.axes_dict["susceptibility"].set_ylabel("Host\nSusceptibility")
+            g.axes_dict["susceptibility"].set_xlabel("Time")
+            g.axes_dict["susceptibility"].set_yticks([0.0, 0.5, 1.0])
+            g.axes_dict["susceptibility"].set_ylim(bottom=0.0)
+            g.set_titles("")
 
-        g.figure.set_size_inches(4.6, 2.6)
-        g.figure.tight_layout()
+            if _yscale == "symlog":
+                # Linear near zero (below 1e-4) so the exact-zero gaps
+                # stay well-defined, log above it; tick decades are
+                # spelled out explicitly since the default symlog
+                # locator doesn't reach this far down on its own.
+                g.axes_dict["prevalence"].set_yscale("symlog", linthresh=1e-4)
+                # Small negative bottom so the y=0 line isn't flush
+                # against the axis edge, without a tick below zero.
+                g.axes_dict["prevalence"].set_ylim(bottom=-2e-5, top=1)
+                g.axes_dict["prevalence"].set_yticks(
+                    [0, 1e-4, 1e-3, 1e-2, 1e-1, 1]
+                )
+                g.axes_dict["prevalence"].yaxis.set_major_formatter(
+                    mticker.FuncFormatter(_fmt)
+                )
+                # Minor ticks double as a visual cue for where the
+                # scale is log (uneven, sub-decade spacing) versus
+                # linear (evenly spaced) near zero.
+                _log_minors = mticker.SymmetricalLogLocator(
+                    base=10,
+                    linthresh=1e-4,
+                    subs=np.arange(2, 10),
+                    transform=g.axes_dict["prevalence"].yaxis.get_transform(),
+                ).tick_values(1e-4, 1)
+                _linear_minors = np.linspace(0, 1e-4, 5)[1:-1]
+                g.axes_dict["prevalence"].yaxis.set_minor_locator(
+                    mticker.FixedLocator([*_linear_minors, *_log_minors])
+                )
+                g.axes_dict["prevalence"].tick_params(
+                    axis="y", which="major", pad=-2, labelsize=7
+                )
+                g.axes_dict["prevalence"].tick_params(
+                    axis="y", which="minor", length=2
+                )
+                # Angled labels take less horizontal room, so they can
+                # sit closer to the axis.
+                for _tick in g.axes_dict["prevalence"].get_yticklabels():
+                    _tick.set_rotation(45)
+                    _tick.set_ha("right")
+            elif _yscale == "log":
+                g.axes_dict["prevalence"].set_yscale("log")
+                g.axes_dict["prevalence"].set_ylim(bottom=1e-9)
 
-        # Fold the "strain" title into the legend's single row as a
-        # label-only dummy entry, rather than a separate title line.
-        _handles = g.legend.legend_handles
-        _labels = [_t.get_text() for _t in g.legend.get_texts()]
-        for _handle, _label in zip(_handles, _labels):
-            if _label == "12":
-                # Denser dashes than the plotted line so the short
-                # legend key still reads clearly as dotted.
-                _handle.set_linewidth(2.8)
-                _handle.set_dashes([0.8, 1.2])
-        _dummy = mlines.Line2D([], [], linestyle="none", label="Strain")
-        g.legend.remove()
-        g.figure.legend(
-            handles=[_dummy, *_handles],
-            labels=["Strain", *_labels],
-            loc="upper center",
-            bbox_to_anchor=(0.5, 1.09),
-            ncol=len(_labels) + 1,
-            frameon=False,
-            handlelength=1.8,
-            handletextpad=0.6,
-            columnspacing=1.2,
-        )
+            # Widen 12's dotted line beyond the shared base linewidth
+            # so its sparser dots stay legible.
+            for _ax in g.axes.flat:
+                for _line in _ax.lines:
+                    if mcolors.to_rgb(_line.get_color()) == _dotted_rgb:
+                        _line.set_linewidth(2.8)
+
+            g.figure.set_size_inches(4.6, 2.6)
+            g.figure.tight_layout()
+
+            # Fold the "strain" title into the legend's single row as
+            # a label-only dummy entry, rather than a separate title
+            # line.
+            _handles = g.legend.legend_handles
+            _labels = [_t.get_text() for _t in g.legend.get_texts()]
+            for _handle, _label in zip(_handles, _labels):
+                if _label == "12":
+                    # Denser dashes than the plotted line so the short
+                    # legend key still reads clearly as dotted.
+                    _handle.set_linewidth(2.8)
+                    _handle.set_dashes([0.8, 1.2])
+            _dummy = mlines.Line2D([], [], linestyle="none", label="Strain")
+            g.legend.remove()
+            g.figure.legend(
+                handles=[_dummy, *_handles],
+                labels=["Strain", *_labels],
+                loc="upper center",
+                bbox_to_anchor=(0.5, 1.09),
+                ncol=len(_labels) + 1,
+                frameon=False,
+                handlelength=1.8,
+                handletextpad=0.6,
+                columnspacing=1.2,
+            )
     return
 
 
