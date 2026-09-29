@@ -15,6 +15,7 @@ def import_std():
 def import_pkg():
     import marimo as mo
     import matplotlib.colors as mcolors
+    import matplotlib.legend_handler as mlegend_handler
     import matplotlib.lines as mlines
     import matplotlib.pyplot as plt
     import pandas as pd
@@ -23,7 +24,18 @@ def import_pkg():
     from teeplot import teeplot as tp
     from watermark import watermark
 
-    return mcolors, mlines, mo, pd, plt, requests, sns, tp, watermark
+    return (
+        mcolors,
+        mlegend_handler,
+        mlines,
+        mo,
+        pd,
+        plt,
+        requests,
+        sns,
+        tp,
+        watermark,
+    )
 
 
 @app.cell(hide_code=True)
@@ -130,7 +142,7 @@ def delimit_plot(mo):
 
 
 @app.cell
-def def_plot(mcolors, mlines, plt, sns, tp):
+def def_plot(mcolors, mlegend_handler, mlines, plt, sns, tp):
     STRAIN_ORDER = ["02", "03", "12", "13"]
     # Same named-color palette as 2026-09-26-figrender.py, so strain
     # identity reads consistently across notebooks.
@@ -215,10 +227,21 @@ def def_plot(mcolors, mlines, plt, sns, tp):
                 legend_ax = ax_prev
 
             # Widen 12's dotted line beyond the shared base linewidth
-            # so its sparser dots stay legible.
+            # so its sparser dots stay legible, and add a thin solid
+            # underlay so the trajectory still reads as continuous
+            # between dots.
             for ax in axes:
-                for line in ax.lines:
+                for line in list(ax.lines):
                     if mcolors.to_rgb(line.get_color()) == DOTTED_RGB:
+                        xdata, ydata = line.get_data()
+                        ax.plot(
+                            xdata,
+                            ydata,
+                            color=line.get_color(),
+                            linewidth=0.6,
+                            zorder=line.get_zorder() - 0.1,
+                            solid_capstyle="round",
+                        )
                         line.set_linewidth(2.8)
                 ax.set_xlim(left=0, right=xmax)
 
@@ -232,12 +255,22 @@ def def_plot(mcolors, mlines, plt, sns, tp):
             handles = legend.legend_handles
             labels = [t.get_text() for t in legend.get_texts()]
             legend.remove()
-            for handle, label in zip(handles, labels):
+            for i, (handle, label) in enumerate(zip(handles, labels)):
                 if label == "12":
                     # Denser dashes than the plotted line so the
                     # short legend key still reads clearly as dotted.
                     handle.set_linewidth(2.8)
                     handle.set_dashes([0.8, 1.2])
+                    # Pair with a thin solid proxy so the key matches
+                    # the plotted line's solid-underlay treatment.
+                    solid_proxy = mlines.Line2D(
+                        [],
+                        [],
+                        color=handle.get_color(),
+                        linewidth=0.6,
+                        solid_capstyle="round",
+                    )
+                    handles[i] = (solid_proxy, handle)
             dummy = mlines.Line2D([], [], linestyle="none", label="Strain")
             fig.legend(
                 handles=[dummy, *handles],
@@ -249,6 +282,7 @@ def def_plot(mcolors, mlines, plt, sns, tp):
                 handlelength=1.8,
                 handletextpad=0.6,
                 columnspacing=1.2,
+                handler_map={tuple: mlegend_handler.HandlerTuple(ndivide=1)},
             )
         return fig
 
