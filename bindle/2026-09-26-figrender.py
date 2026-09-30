@@ -73,7 +73,7 @@ def delimit_data(mo):
     replacement, and the ensuing damped oscillations in strain
     prevalence.
     The underlying Madonna ODE-model trajectory is hosted on OSF as
-    `Fig3.csv` (<https://osf.io/jy59v>) and downloaded below with no
+    `Fig3.csv` (<https://osf.io/wr7dh>) and downloaded below with no
     caching-key CLI arguments (this is a visualization notebook).
     Columns are keyed `TIME` plus one variable per 2-allele strain
     (named by the pair of mutated sites, e.g. `02`, `03`, `12`, `13`):
@@ -110,7 +110,7 @@ def def_fetch(pathlib, pd, requests):
 
 @app.cell
 def download_data(fetch_osf):
-    fig3_df = fetch_osf("jy59v")
+    fig3_df = fetch_osf("wr7dh")
     fig3_df.columns = [col.replace(":1", "") for col in fig3_df.columns]
     print(f"loaded Fig3 dataframe: {fig3_df.shape}")
     print(fig3_df.head().to_string(index=False))
