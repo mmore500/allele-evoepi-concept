@@ -1241,6 +1241,34 @@ def plot_figs23cc(fetch_osf, pathlib, plot_figure):
 
 
 @app.cell
+def plot_tables23_1(fetch_osf, pathlib, plot_figure):
+    _df = fetch_osf("7bf3j")
+    _long_df, _has_susceptibility = prep_long(_df)
+    plot_figure(
+        _long_df,
+        _has_susceptibility,
+        "TableS23.1",
+        3000,
+        pathlib.Path(__file__).stem,
+    )
+    return
+
+
+@app.cell
+def plot_tables23_2(fetch_osf, pathlib, plot_figure):
+    _df = fetch_osf("w4tu9")
+    _long_df, _has_susceptibility = prep_long(_df)
+    plot_figure(
+        _long_df,
+        _has_susceptibility,
+        "TableS23.2",
+        3000,
+        pathlib.Path(__file__).stem,
+    )
+    return
+
+
+@app.cell
 def plot_tables24a(fetch_osf, pathlib, plot_figure):
     _df = fetch_osf("pjnsc")
     _long_df, _has_susceptibility = prep_long(_df)
