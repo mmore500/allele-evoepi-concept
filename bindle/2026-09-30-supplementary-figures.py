@@ -982,6 +982,20 @@ def plot_tables15b(fetch_osf, pathlib, plot_figure):
 
 
 @app.cell
+def plot_tables15bb(fetch_osf, pathlib, plot_figure):
+    _df = fetch_osf("gu7pk")
+    _long_df, _has_susceptibility = prep_long(_df)
+    plot_figure(
+        _long_df,
+        _has_susceptibility,
+        "TableS15bb",
+        3000,
+        pathlib.Path(__file__).stem,
+    )
+    return
+
+
+@app.cell
 def plot_tables16a(fetch_osf, pathlib, plot_figure):
     _df = fetch_osf("z4r2h")
     _long_df, _has_susceptibility = prep_long(_df)
