@@ -100,6 +100,15 @@ def delimit_data(mo):
     trajectory reads as continuous between dots, and each figure's
     x-axis maximum is set to match the corresponding original figure.
     Figures are not titled.
+
+    `TableS14`-`TableS24b` are additional OSF-hosted datasets using
+    the same `J**`/`SuscToI**` column convention, rendered with the
+    same `plot_figure` helper. No original figure/caption was
+    available for these to match axis ranges against, so each simply
+    spans its full simulated time range. `TableS18` holds two
+    conditions in one file (columns suffixed `:1`/`:2`); these are
+    split into separate `TableS18a`/`TableS18b` prevalence-only
+    figures rather than merged into one.
     """)
     return
 
@@ -525,6 +534,7 @@ def def_plot(mcolors, mlegend_handler, mlines, plt, sns, tp):
                 )
             ax_comp.set_ylabel("Compartment\nOccupancy")
             ax_comp.set_xlabel("Time")
+            ax_comp.set_ylim(0.0, 0.3)
 
             for ax in axes:
                 ax.set_xlim(left=0, right=xmax)
@@ -924,6 +934,307 @@ def plot_figs13c(fetch_osf, pathlib, plot_figure_s13, prep_long_s13):
         _has_susceptibility,
         "FigS13c",
         2000,
+        pathlib.Path(__file__).stem,
+    )
+    return
+
+
+@app.cell
+def plot_tables14(fetch_osf, pathlib, plot_figure):
+    _df = fetch_osf("x5jze")
+    _long_df, _has_susceptibility = prep_long(_df)
+    plot_figure(
+        _long_df,
+        _has_susceptibility,
+        "TableS14",
+        3000,
+        pathlib.Path(__file__).stem,
+    )
+    return
+
+
+@app.cell
+def plot_tables15a(fetch_osf, pathlib, plot_figure):
+    _df = fetch_osf("g8rz9")
+    _long_df, _has_susceptibility = prep_long(_df)
+    plot_figure(
+        _long_df,
+        _has_susceptibility,
+        "TableS15a",
+        3000,
+        pathlib.Path(__file__).stem,
+    )
+    return
+
+
+@app.cell
+def plot_tables15b(fetch_osf, pathlib, plot_figure):
+    _df = fetch_osf("kepmh")
+    _long_df, _has_susceptibility = prep_long(_df)
+    plot_figure(
+        _long_df,
+        _has_susceptibility,
+        "TableS15b",
+        3000,
+        pathlib.Path(__file__).stem,
+    )
+    return
+
+
+@app.cell
+def plot_tables16a(fetch_osf, pathlib, plot_figure):
+    _df = fetch_osf("z4r2h")
+    _long_df, _has_susceptibility = prep_long(_df)
+    plot_figure(
+        _long_df,
+        _has_susceptibility,
+        "TableS16a",
+        3000,
+        pathlib.Path(__file__).stem,
+    )
+    return
+
+
+@app.cell
+def plot_tables16aa(fetch_osf, pathlib, plot_figure):
+    _df = fetch_osf("6afds")
+    _long_df, _has_susceptibility = prep_long(_df)
+    plot_figure(
+        _long_df,
+        _has_susceptibility,
+        "TableS16aa",
+        3000,
+        pathlib.Path(__file__).stem,
+    )
+    return
+
+
+@app.cell
+def plot_tables16b(fetch_osf, pathlib, plot_figure):
+    _df = fetch_osf("n93ae")
+    _long_df, _has_susceptibility = prep_long(_df)
+    plot_figure(
+        _long_df,
+        _has_susceptibility,
+        "TableS16b",
+        3000,
+        pathlib.Path(__file__).stem,
+    )
+    return
+
+
+@app.cell
+def plot_tables17(fetch_osf, pathlib, plot_figure):
+    _df = fetch_osf("zu3j6")
+    _long_df, _has_susceptibility = prep_long(_df)
+    plot_figure(
+        _long_df,
+        _has_susceptibility,
+        "TableS17",
+        3000,
+        pathlib.Path(__file__).stem,
+    )
+    return
+
+
+@app.cell
+def plot_tables18a(fetch_osf, pathlib, plot_figure):
+    # TableS18 holds two conditions in one file, distinguished by
+    # ":1"/":2" column suffixes (fetch_osf strips only ":1"); split
+    # into two standalone prevalence-only figures.
+    _df = fetch_osf("ksva6")
+    _cond_df = _df[["TIME", "J13", "J02", "J03", "J12"]]
+    _long_df, _has_susceptibility = prep_long(_cond_df)
+    plot_figure(
+        _long_df,
+        _has_susceptibility,
+        "TableS18a",
+        3000,
+        pathlib.Path(__file__).stem,
+    )
+    return
+
+
+@app.cell
+def plot_tables18b(fetch_osf, pathlib, plot_figure):
+    _df = fetch_osf("ksva6")
+    _cond_df = _df[["TIME", "J13:2", "J02:2", "J03:2", "J12:2"]].rename(
+        columns=lambda c: c.replace(":2", "")
+    )
+    _long_df, _has_susceptibility = prep_long(_cond_df)
+    plot_figure(
+        _long_df,
+        _has_susceptibility,
+        "TableS18b",
+        3000,
+        pathlib.Path(__file__).stem,
+    )
+    return
+
+
+@app.cell
+def plot_tables19(fetch_osf, pathlib, plot_figure):
+    _df = fetch_osf("x45tc")
+    _long_df, _has_susceptibility = prep_long(_df)
+    plot_figure(
+        _long_df,
+        _has_susceptibility,
+        "TableS19",
+        3000,
+        pathlib.Path(__file__).stem,
+    )
+    return
+
+
+@app.cell
+def plot_tables20(fetch_osf, pathlib, plot_figure):
+    _df = fetch_osf("fya3n")
+    _long_df, _has_susceptibility = prep_long(_df)
+    plot_figure(
+        _long_df,
+        _has_susceptibility,
+        "TableS20",
+        3000,
+        pathlib.Path(__file__).stem,
+    )
+    return
+
+
+@app.cell
+def plot_tables21a(fetch_osf, pathlib, plot_figure):
+    _df = fetch_osf("6jctb")
+    _long_df, _has_susceptibility = prep_long(_df)
+    plot_figure(
+        _long_df,
+        _has_susceptibility,
+        "TableS21a",
+        3000,
+        pathlib.Path(__file__).stem,
+    )
+    return
+
+
+@app.cell
+def plot_tables21b(fetch_osf, pathlib, plot_figure):
+    _df = fetch_osf("aw9hn")
+    _long_df, _has_susceptibility = prep_long(_df)
+    plot_figure(
+        _long_df,
+        _has_susceptibility,
+        "TableS21b",
+        3000,
+        pathlib.Path(__file__).stem,
+    )
+    return
+
+
+@app.cell
+def plot_tables21c(fetch_osf, pathlib, plot_figure):
+    _df = fetch_osf("3uyn6")
+    _long_df, _has_susceptibility = prep_long(_df)
+    plot_figure(
+        _long_df,
+        _has_susceptibility,
+        "TableS21c",
+        3000,
+        pathlib.Path(__file__).stem,
+    )
+    return
+
+
+@app.cell
+def plot_tables21d(fetch_osf, pathlib, plot_figure):
+    _df = fetch_osf("kzuar")
+    _long_df, _has_susceptibility = prep_long(_df)
+    plot_figure(
+        _long_df,
+        _has_susceptibility,
+        "TableS21d",
+        3000,
+        pathlib.Path(__file__).stem,
+    )
+    return
+
+
+@app.cell
+def plot_tables22(fetch_osf, pathlib, plot_figure):
+    _df = fetch_osf("8f2hb")
+    _long_df, _has_susceptibility = prep_long(_df)
+    plot_figure(
+        _long_df,
+        _has_susceptibility,
+        "TableS22",
+        3000,
+        pathlib.Path(__file__).stem,
+    )
+    return
+
+
+@app.cell
+def plot_tables23a(fetch_osf, pathlib, plot_figure):
+    _df = fetch_osf("k54ud")
+    _long_df, _has_susceptibility = prep_long(_df)
+    plot_figure(
+        _long_df,
+        _has_susceptibility,
+        "TableS23a",
+        3000,
+        pathlib.Path(__file__).stem,
+    )
+    return
+
+
+@app.cell
+def plot_tables23b(fetch_osf, pathlib, plot_figure):
+    _df = fetch_osf("g4h8x")
+    _long_df, _has_susceptibility = prep_long(_df)
+    plot_figure(
+        _long_df,
+        _has_susceptibility,
+        "TableS23b",
+        3000,
+        pathlib.Path(__file__).stem,
+    )
+    return
+
+
+@app.cell
+def plot_tables23c(fetch_osf, pathlib, plot_figure):
+    _df = fetch_osf("evq5m")
+    _long_df, _has_susceptibility = prep_long(_df)
+    plot_figure(
+        _long_df,
+        _has_susceptibility,
+        "TableS23c",
+        3000,
+        pathlib.Path(__file__).stem,
+    )
+    return
+
+
+@app.cell
+def plot_tables24a(fetch_osf, pathlib, plot_figure):
+    _df = fetch_osf("pjnsc")
+    _long_df, _has_susceptibility = prep_long(_df)
+    plot_figure(
+        _long_df,
+        _has_susceptibility,
+        "TableS24a",
+        3000,
+        pathlib.Path(__file__).stem,
+    )
+    return
+
+
+@app.cell
+def plot_tables24b(fetch_osf, pathlib, plot_figure):
+    _df = fetch_osf("9rxpm")
+    _long_df, _has_susceptibility = prep_long(_df)
+    plot_figure(
+        _long_df,
+        _has_susceptibility,
+        "TableS24b",
+        3000,
         pathlib.Path(__file__).stem,
     )
     return
