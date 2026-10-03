@@ -1227,6 +1227,20 @@ def plot_tables23c(fetch_osf, pathlib, plot_figure):
 
 
 @app.cell
+def plot_figs23cc(fetch_osf, pathlib, plot_figure):
+    _df = fetch_osf("syadr")
+    _long_df, _has_susceptibility = prep_long(_df)
+    plot_figure(
+        _long_df,
+        _has_susceptibility,
+        "FigS23cc",
+        3000,
+        pathlib.Path(__file__).stem,
+    )
+    return
+
+
+@app.cell
 def plot_tables24a(fetch_osf, pathlib, plot_figure):
     _df = fetch_osf("pjnsc")
     _long_df, _has_susceptibility = prep_long(_df)
