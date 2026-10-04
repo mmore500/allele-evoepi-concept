@@ -15,6 +15,7 @@ def import_std():
 def import_pkg():
     import marimo as mo
     import matplotlib.colors as mcolors
+    import matplotlib.legend_handler as mlegend_handler
     import matplotlib.lines as mlines
     import matplotlib.pyplot as plt
     import matplotlib.ticker as mticker
@@ -27,6 +28,7 @@ def import_pkg():
 
     return (
         mcolors,
+        mlegend_handler,
         mlines,
         mo,
         mticker,
@@ -155,7 +157,17 @@ def prep_long(fig3_df):
 
 
 @app.cell
-def plot_fig3(long_df, mcolors, mlines, mticker, np, pathlib, sns, tp):
+def plot_fig3(
+    long_df,
+    mcolors,
+    mlegend_handler,
+    mlines,
+    mticker,
+    np,
+    pathlib,
+    sns,
+    tp,
+):
     _strain_order = ["02", "03", "12", "13"]
     # Named colors ordered by mutational distance from founder strain
     # 02: wt is a subdued dark blue-purple, the two single-mutant
@@ -195,7 +207,7 @@ def plot_fig3(long_df, mcolors, mlines, mticker, np, pathlib, sns, tp):
             palette=_palette,
             linewidth=1.2,
             row="quantity",
-            row_order=["prevalence", "susceptibility"],
+            row_order=["susceptibility", "prevalence"],
             kind="line",
             facet_kws=dict(sharey=False),
             teeplot_outattrs={
@@ -256,10 +268,23 @@ def plot_fig3(long_df, mcolors, mlines, mticker, np, pathlib, sns, tp):
                 g.axes_dict["prevalence"].set_ylim(bottom=1e-9)
 
             # Widen 12's dotted line beyond the shared base linewidth
-            # so its sparser dots stay legible.
+            # so its sparser dots stay legible, and add a thin solid
+            # underlay so the trajectory still reads as continuous
+            # between dots.
             for _ax in g.axes.flat:
-                for _line in _ax.lines:
+                for _line in list(_ax.lines):
                     if mcolors.to_rgb(_line.get_color()) == _dotted_rgb:
+                        _xdata, _ydata = _line.get_data()
+                        if len(_xdata) == 0:
+                            continue
+                        _ax.plot(
+                            _xdata,
+                            _ydata,
+                            color=_line.get_color(),
+                            linewidth=0.6,
+                            zorder=_line.get_zorder() - 0.1,
+                            solid_capstyle="round",
+                        )
                         _line.set_linewidth(2.8)
 
             g.figure.set_size_inches(4.6, 2.6)
@@ -270,12 +295,22 @@ def plot_fig3(long_df, mcolors, mlines, mticker, np, pathlib, sns, tp):
             # line.
             _handles = g.legend.legend_handles
             _labels = [_t.get_text() for _t in g.legend.get_texts()]
-            for _handle, _label in zip(_handles, _labels):
+            for _i, (_handle, _label) in enumerate(zip(_handles, _labels)):
                 if _label == "12":
                     # Denser dashes than the plotted line so the short
                     # legend key still reads clearly as dotted.
                     _handle.set_linewidth(2.8)
                     _handle.set_dashes([0.8, 1.2])
+                    # Pair with a thin solid proxy so the key matches
+                    # the plotted line's solid-underlay treatment.
+                    _solid_proxy = mlines.Line2D(
+                        [],
+                        [],
+                        color=_handle.get_color(),
+                        linewidth=0.6,
+                        solid_capstyle="round",
+                    )
+                    _handles[_i] = (_solid_proxy, _handle)
             _dummy = mlines.Line2D([], [], linestyle="none", label="Strain")
             g.legend.remove()
             g.figure.legend(
@@ -288,6 +323,7 @@ def plot_fig3(long_df, mcolors, mlines, mticker, np, pathlib, sns, tp):
                 handlelength=1.8,
                 handletextpad=0.6,
                 columnspacing=1.2,
+                handler_map={tuple: mlegend_handler.HandlerTuple(ndivide=1)},
             )
     return
 
@@ -306,7 +342,16 @@ def delimit_plot_3panel(mo):
 
 
 @app.cell
-def plot_fig3_3panel(long_df, mcolors, mlines, pathlib, plt, sns, tp):
+def plot_fig3_3panel(
+    long_df,
+    mcolors,
+    mlegend_handler,
+    mlines,
+    pathlib,
+    plt,
+    sns,
+    tp,
+):
     _strain_order = ["02", "03", "12", "13"]
     _palette = {
         "02": "#373061",
@@ -382,10 +427,22 @@ def plot_fig3_3panel(long_df, mcolors, mlines, pathlib, plt, sns, tp):
         _ax_lin_susc.set_ylim(bottom=0.0)
 
         # Widen 12's dotted line beyond the shared base linewidth so
-        # its sparser dots stay legible.
+        # its sparser dots stay legible, and add a thin solid underlay
+        # so the trajectory still reads as continuous between dots.
         for _ax in axes:
-            for _line in _ax.lines:
+            for _line in list(_ax.lines):
                 if mcolors.to_rgb(_line.get_color()) == _dotted_rgb:
+                    _xdata, _ydata = _line.get_data()
+                    if len(_xdata) == 0:
+                        continue
+                    _ax.plot(
+                        _xdata,
+                        _ydata,
+                        color=_line.get_color(),
+                        linewidth=0.6,
+                        zorder=_line.get_zorder() - 0.1,
+                        solid_capstyle="round",
+                    )
                     _line.set_linewidth(2.8)
 
         sns.despine(fig=fig)
@@ -397,12 +454,22 @@ def plot_fig3_3panel(long_df, mcolors, mlines, pathlib, plt, sns, tp):
         _handles = _legend.legend_handles
         _labels = [_t.get_text() for _t in _legend.get_texts()]
         _legend.remove()
-        for _handle, _label in zip(_handles, _labels):
+        for _i, (_handle, _label) in enumerate(zip(_handles, _labels)):
             if _label == "12":
                 # Denser dashes than the plotted line so the short
                 # legend key still reads clearly as dotted.
                 _handle.set_linewidth(2.8)
                 _handle.set_dashes([0.8, 1.2])
+                # Pair with a thin solid proxy so the key matches the
+                # plotted line's solid-underlay treatment.
+                _solid_proxy = mlines.Line2D(
+                    [],
+                    [],
+                    color=_handle.get_color(),
+                    linewidth=0.6,
+                    solid_capstyle="round",
+                )
+                _handles[_i] = (_solid_proxy, _handle)
         _dummy = mlines.Line2D([], [], linestyle="none", label="Strain")
         fig.legend(
             handles=[_dummy, *_handles],
@@ -414,6 +481,7 @@ def plot_fig3_3panel(long_df, mcolors, mlines, pathlib, plt, sns, tp):
             handlelength=1.8,
             handletextpad=0.6,
             columnspacing=1.2,
+            handler_map={tuple: mlegend_handler.HandlerTuple(ndivide=1)},
         )
     return
 
