@@ -195,7 +195,7 @@ def plot_fig3(long_df, mcolors, mlines, mticker, np, pathlib, sns, tp):
             palette=_palette,
             linewidth=1.2,
             row="quantity",
-            row_order=["prevalence", "susceptibility"],
+            row_order=["susceptibility", "prevalence"],
             kind="line",
             facet_kws=dict(sharey=False),
             teeplot_outattrs={
