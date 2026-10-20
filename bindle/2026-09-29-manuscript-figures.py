@@ -242,6 +242,7 @@ def def_plot(mcolors, mlegend_handler, mlines, plt, sns, tp):
             if prevalence_ymax is not None:
                 # Match matplotlib's default 5% margin below zero.
                 ax_prev.set_ylim(-0.05 * prevalence_ymax, prevalence_ymax)
+                ax_prev.set_yticks([0.0, prevalence_ymax / 2, prevalence_ymax])
             if legend_ax is None:
                 legend_ax = ax_prev
 
@@ -349,7 +350,7 @@ def plot_fig5(fetch_osf, pathlib, plot_manuscript_figure):
         3000,
         pathlib.Path(__file__).stem,
         show_susceptibility=False,
-        prevalence_ymax=0.12,
+        prevalence_ymax=0.1,
     )
     return
 
@@ -364,7 +365,7 @@ def plot_fig6(fetch_osf, pathlib, plot_manuscript_figure):
         "Fig6",
         3000,
         pathlib.Path(__file__).stem,
-        prevalence_ymax=0.12,
+        prevalence_ymax=0.1,
     )
     return
 
@@ -393,7 +394,7 @@ def plot_fig8(fetch_osf, pathlib, plot_manuscript_figure):
         "Fig8",
         3000,
         pathlib.Path(__file__).stem,
-        prevalence_ymax=0.12,
+        prevalence_ymax=0.1,
     )
     return
 
