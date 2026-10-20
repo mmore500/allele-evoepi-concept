@@ -161,11 +161,32 @@ def def_plot(mcolors, mlegend_handler, mlines, plt, sns, tp):
     DOTTED_RGB = mcolors.to_rgb(PALETTE["12"])
 
     def plot_manuscript_figure(
-        long_df, has_susceptibility, name, xmax, pathlib_stem
+        long_df,
+        has_susceptibility,
+        name,
+        xmax,
+        pathlib_stem,
+        show_susceptibility=True,
+        prevalence_scale=1,
     ):
         prevalence_df = long_df[long_df["quantity"] == "prevalence"]
+        has_susceptibility = has_susceptibility and show_susceptibility
         nrows = 2 if has_susceptibility else 1
-        figsize = (4.6, 3.9) if has_susceptibility else (4.6, 2.2)
+        # Panel heights match the original layouts at prevalence_scale=1;
+        # prevalence_scale stretches only the prevalence panel.
+        if has_susceptibility:
+            height_ratios = [1, prevalence_scale]
+            figheight = 3.9 / 2 * (1 + prevalence_scale)
+        else:
+            height_ratios = [1]
+            figheight = 2.2 * prevalence_scale
+        figsize = (4.6, figheight)
+
+        outattrs = {"a": f"{name.lower()}-strain-dynamics"}
+        if not show_susceptibility:
+            outattrs["susceptibility"] = False
+        if prevalence_scale != 1:
+            outattrs["prevalence-scale"] = prevalence_scale
 
         with tp.teed(
             plt.subplots,
@@ -173,7 +194,8 @@ def def_plot(mcolors, mlegend_handler, mlines, plt, sns, tp):
             ncols=1,
             squeeze=False,
             figsize=figsize,
-            teeplot_outattrs={"a": f"{name.lower()}-strain-dynamics"},
+            gridspec_kw={"height_ratios": height_ratios},
+            teeplot_outattrs=outattrs,
             teeplot_show=True,
             teeplot_subdir=pathlib_stem,
         ) as (fig, axes_grid):
@@ -276,7 +298,9 @@ def def_plot(mcolors, mlegend_handler, mlines, plt, sns, tp):
                 handles=[dummy, *handles],
                 labels=["Strain", *labels],
                 loc="upper center",
-                bbox_to_anchor=(0.5, 1.06 if has_susceptibility else 1.1),
+                # Hold the legend a fixed physical distance above the
+                # axes, regardless of figure height.
+                bbox_to_anchor=(0.5, 1 + 0.23 / figheight),
                 ncol=len(labels) + 1,
                 frameon=False,
                 handlelength=1.8,
@@ -327,6 +351,8 @@ def plot_fig5(fetch_osf, pathlib, plot_manuscript_figure):
         "Fig5",
         3000,
         pathlib.Path(__file__).stem,
+        show_susceptibility=False,
+        prevalence_scale=2,
     )
     return
 
@@ -341,6 +367,7 @@ def plot_fig6(fetch_osf, pathlib, plot_manuscript_figure):
         "Fig6",
         3000,
         pathlib.Path(__file__).stem,
+        prevalence_scale=2,
     )
     return
 
@@ -369,6 +396,7 @@ def plot_fig8(fetch_osf, pathlib, plot_manuscript_figure):
         "Fig8",
         3000,
         pathlib.Path(__file__).stem,
+        prevalence_scale=2,
     )
     return
 
