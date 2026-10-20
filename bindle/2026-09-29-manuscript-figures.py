@@ -71,22 +71,19 @@ def delimit_data(mo):
     in `2026-09-26-figrender.py`.
 
     Each underlying trajectory is hosted on OSF as a `FigN.csv` (or,
-    for v3 `Fig11b`, tab-delimited `.txt`) file with the same column
+    for `Fig11b`, tab-delimited `.txt`) file with the same column
     convention as `Fig3.csv`: `TIME` plus a `J**` prevalence column
     and (where present) a `SuscToI**` susceptibility column per
     2-allele strain (`02`, `03`, `12`, `13`). Datasets for Figures
-    10, 11, and 12 omit the susceptibility columns and are rendered as a
+    11 and 12 omit the susceptibility columns and are rendered as a
     single prevalence panel; the rest render as a two-panel
     susceptibility+prevalence figure matching Figure 3's layout.
 
-    Figure numbers below follow the current manuscript draft. OSF
-    file names follow the v3 preprint, which had one more figure
-    before this point: draft Figures 7-12 are v3 Figures 8-13, and v3
-    Figure 7 (absent from the draft) is kept as `FigV3-7`. Figures 10
-    and 11 are each a single multi-panel manuscript figure (10: left/
-    center/right for joint-immunity `mij` = 0, 0.2, 0.4; 11: left/
+    Figure numbers below refer to the v3 manuscript. Figures 11 and
+    12 are each a single multi-panel manuscript figure (11: left/
+    center/right for joint-immunity `mij` = 0, 0.2, 0.4; 12: left/
     right for Case 1 allele-based vs. Case 2 strain-based immunity),
-    split here into separate `10a`/`10b`/`10c` and `11a`/`11b` cells
+    split here into separate `11a`/`11b`/`11c` and `12a`/`12b` cells
     to match how the underlying data is hosted on OSF.
     """)
     return
@@ -245,7 +242,6 @@ def def_plot(mcolors, mlegend_handler, mlines, plt, sns, tp):
             if prevalence_ymax is not None:
                 # Match matplotlib's default 5% margin below zero.
                 ax_prev.set_ylim(-0.05 * prevalence_ymax, prevalence_ymax)
-                ax_prev.set_yticks([0.0, prevalence_ymax / 2, prevalence_ymax])
             if legend_ax is None:
                 legend_ax = ax_prev
 
@@ -353,7 +349,7 @@ def plot_fig5(fetch_osf, pathlib, plot_manuscript_figure):
         3000,
         pathlib.Path(__file__).stem,
         show_susceptibility=False,
-        prevalence_ymax=0.1,
+        prevalence_ymax=0.12,
     )
     return
 
@@ -368,48 +364,19 @@ def plot_fig6(fetch_osf, pathlib, plot_manuscript_figure):
         "Fig6",
         3000,
         pathlib.Path(__file__).stem,
-        prevalence_ymax=0.1,
-    )
-    return
-
-
-@app.cell
-def plot_fig_v3_7(fetch_osf, pathlib, plot_manuscript_figure):
-    _df = fetch_osf("vmw46")
-    _long_df, _has_susceptibility = prep_long(_df)
-    plot_manuscript_figure(
-        _long_df,
-        _has_susceptibility,
-        "FigV3-7",
-        2000,
-        pathlib.Path(__file__).stem,
+        prevalence_ymax=0.12,
     )
     return
 
 
 @app.cell
 def plot_fig7(fetch_osf, pathlib, plot_manuscript_figure):
-    _df = fetch_osf("tzqxv")
+    _df = fetch_osf("vmw46")
     _long_df, _has_susceptibility = prep_long(_df)
     plot_manuscript_figure(
         _long_df,
         _has_susceptibility,
         "Fig7",
-        3000,
-        pathlib.Path(__file__).stem,
-        prevalence_ymax=0.1,
-    )
-    return
-
-
-@app.cell
-def plot_fig8(fetch_osf, pathlib, plot_manuscript_figure):
-    _df = fetch_osf("vbt2y")
-    _long_df, _has_susceptibility = prep_long(_df)
-    plot_manuscript_figure(
-        _long_df,
-        _has_susceptibility,
-        "Fig8",
         2000,
         pathlib.Path(__file__).stem,
     )
@@ -417,56 +384,43 @@ def plot_fig8(fetch_osf, pathlib, plot_manuscript_figure):
 
 
 @app.cell
+def plot_fig8(fetch_osf, pathlib, plot_manuscript_figure):
+    _df = fetch_osf("tzqxv")
+    _long_df, _has_susceptibility = prep_long(_df)
+    plot_manuscript_figure(
+        _long_df,
+        _has_susceptibility,
+        "Fig8",
+        3000,
+        pathlib.Path(__file__).stem,
+        prevalence_ymax=0.12,
+    )
+    return
+
+
+@app.cell
 def plot_fig9(fetch_osf, pathlib, plot_manuscript_figure):
-    _df = fetch_osf("e67fb")
+    _df = fetch_osf("vbt2y")
     _long_df, _has_susceptibility = prep_long(_df)
     plot_manuscript_figure(
         _long_df,
         _has_susceptibility,
         "Fig9",
+        2000,
+        pathlib.Path(__file__).stem,
+    )
+    return
+
+
+@app.cell
+def plot_fig10(fetch_osf, pathlib, plot_manuscript_figure):
+    _df = fetch_osf("e67fb")
+    _long_df, _has_susceptibility = prep_long(_df)
+    plot_manuscript_figure(
+        _long_df,
+        _has_susceptibility,
+        "Fig10",
         3000,
-        pathlib.Path(__file__).stem,
-    )
-    return
-
-
-@app.cell
-def plot_fig10a(fetch_osf, pathlib, plot_manuscript_figure):
-    _df = fetch_osf("wkd37")
-    _long_df, _has_susceptibility = prep_long(_df)
-    plot_manuscript_figure(
-        _long_df,
-        _has_susceptibility,
-        "Fig10a",
-        1200,
-        pathlib.Path(__file__).stem,
-    )
-    return
-
-
-@app.cell
-def plot_fig10b(fetch_osf, pathlib, plot_manuscript_figure):
-    _df = fetch_osf("shm8d", sep="\t")
-    _long_df, _has_susceptibility = prep_long(_df)
-    plot_manuscript_figure(
-        _long_df,
-        _has_susceptibility,
-        "Fig10b",
-        1200,
-        pathlib.Path(__file__).stem,
-    )
-    return
-
-
-@app.cell
-def plot_fig10c(fetch_osf, pathlib, plot_manuscript_figure):
-    _df = fetch_osf("3uxqd")
-    _long_df, _has_susceptibility = prep_long(_df)
-    plot_manuscript_figure(
-        _long_df,
-        _has_susceptibility,
-        "Fig10c",
-        1200,
         pathlib.Path(__file__).stem,
     )
     return
@@ -474,7 +428,7 @@ def plot_fig10c(fetch_osf, pathlib, plot_manuscript_figure):
 
 @app.cell
 def plot_fig11a(fetch_osf, pathlib, plot_manuscript_figure):
-    _df = fetch_osf("zy5aq")
+    _df = fetch_osf("wkd37")
     _long_df, _has_susceptibility = prep_long(_df)
     plot_manuscript_figure(
         _long_df,
@@ -488,7 +442,7 @@ def plot_fig11a(fetch_osf, pathlib, plot_manuscript_figure):
 
 @app.cell
 def plot_fig11b(fetch_osf, pathlib, plot_manuscript_figure):
-    _df = fetch_osf("uk5sc")
+    _df = fetch_osf("shm8d", sep="\t")
     _long_df, _has_susceptibility = prep_long(_df)
     plot_manuscript_figure(
         _long_df,
@@ -501,13 +455,55 @@ def plot_fig11b(fetch_osf, pathlib, plot_manuscript_figure):
 
 
 @app.cell
-def plot_fig12(fetch_osf, pathlib, plot_manuscript_figure):
+def plot_fig11c(fetch_osf, pathlib, plot_manuscript_figure):
+    _df = fetch_osf("3uxqd")
+    _long_df, _has_susceptibility = prep_long(_df)
+    plot_manuscript_figure(
+        _long_df,
+        _has_susceptibility,
+        "Fig11c",
+        1200,
+        pathlib.Path(__file__).stem,
+    )
+    return
+
+
+@app.cell
+def plot_fig12a(fetch_osf, pathlib, plot_manuscript_figure):
+    _df = fetch_osf("zy5aq")
+    _long_df, _has_susceptibility = prep_long(_df)
+    plot_manuscript_figure(
+        _long_df,
+        _has_susceptibility,
+        "Fig12a",
+        1200,
+        pathlib.Path(__file__).stem,
+    )
+    return
+
+
+@app.cell
+def plot_fig12b(fetch_osf, pathlib, plot_manuscript_figure):
+    _df = fetch_osf("uk5sc")
+    _long_df, _has_susceptibility = prep_long(_df)
+    plot_manuscript_figure(
+        _long_df,
+        _has_susceptibility,
+        "Fig12b",
+        1200,
+        pathlib.Path(__file__).stem,
+    )
+    return
+
+
+@app.cell
+def plot_fig13(fetch_osf, pathlib, plot_manuscript_figure):
     _df = fetch_osf("xsk4t")
     _long_df, _has_susceptibility = prep_long(_df)
     plot_manuscript_figure(
         _long_df,
         _has_susceptibility,
-        "Fig12",
+        "Fig13",
         2000,
         pathlib.Path(__file__).stem,
     )
