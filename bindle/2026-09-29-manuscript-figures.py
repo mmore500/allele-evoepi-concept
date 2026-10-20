@@ -167,7 +167,7 @@ def def_plot(mcolors, mlegend_handler, mlines, plt, sns, tp):
         xmax,
         pathlib_stem,
         show_susceptibility=True,
-        prevalence_zoom=1,
+        prevalence_ymax=None,
     ):
         prevalence_df = long_df[long_df["quantity"] == "prevalence"]
         has_susceptibility = has_susceptibility and show_susceptibility
@@ -178,8 +178,8 @@ def def_plot(mcolors, mlegend_handler, mlines, plt, sns, tp):
         outattrs = {"a": f"{name.lower()}-strain-dynamics"}
         if not show_susceptibility:
             outattrs["susceptibility"] = False
-        if prevalence_zoom != 1:
-            outattrs["prevalence-zoom"] = prevalence_zoom
+        if prevalence_ymax is not None:
+            outattrs["prevalence-ymax"] = prevalence_ymax
 
         with tp.teed(
             plt.subplots,
@@ -237,13 +237,11 @@ def def_plot(mcolors, mlegend_handler, mlines, plt, sns, tp):
             )
             ax_prev.set_ylabel("Strain\nPrevalence")
             ax_prev.set_xlabel("Time")
-            # Magnify the prevalence y-axis, clipping tall early peaks so
+            # Cap the prevalence y-axis, clipping tall early peaks so
             # later low-prevalence dynamics are legible.
-            if prevalence_zoom != 1:
-                ybottom, ytop = ax_prev.get_ylim()
-                ax_prev.set_ylim(
-                    ybottom, ybottom + (ytop - ybottom) / prevalence_zoom
-                )
+            if prevalence_ymax is not None:
+                # Match matplotlib's default 5% margin below zero.
+                ax_prev.set_ylim(-0.05 * prevalence_ymax, prevalence_ymax)
             if legend_ax is None:
                 legend_ax = ax_prev
 
@@ -351,7 +349,7 @@ def plot_fig5(fetch_osf, pathlib, plot_manuscript_figure):
         3000,
         pathlib.Path(__file__).stem,
         show_susceptibility=False,
-        prevalence_zoom=2,
+        prevalence_ymax=0.12,
     )
     return
 
@@ -366,7 +364,7 @@ def plot_fig6(fetch_osf, pathlib, plot_manuscript_figure):
         "Fig6",
         3000,
         pathlib.Path(__file__).stem,
-        prevalence_zoom=2,
+        prevalence_ymax=0.12,
     )
     return
 
@@ -395,7 +393,7 @@ def plot_fig8(fetch_osf, pathlib, plot_manuscript_figure):
         "Fig8",
         3000,
         pathlib.Path(__file__).stem,
-        prevalence_zoom=2,
+        prevalence_ymax=0.12,
     )
     return
 
