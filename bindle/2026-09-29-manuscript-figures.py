@@ -167,26 +167,19 @@ def def_plot(mcolors, mlegend_handler, mlines, plt, sns, tp):
         xmax,
         pathlib_stem,
         show_susceptibility=True,
-        prevalence_scale=1,
+        prevalence_zoom=1,
     ):
         prevalence_df = long_df[long_df["quantity"] == "prevalence"]
         has_susceptibility = has_susceptibility and show_susceptibility
         nrows = 2 if has_susceptibility else 1
-        # Panel heights match the original layouts at prevalence_scale=1;
-        # prevalence_scale stretches only the prevalence panel.
-        if has_susceptibility:
-            height_ratios = [1, prevalence_scale]
-            figheight = 3.9 / 2 * (1 + prevalence_scale)
-        else:
-            height_ratios = [1]
-            figheight = 2.2 * prevalence_scale
+        figheight = 3.9 if has_susceptibility else 2.2
         figsize = (4.6, figheight)
 
         outattrs = {"a": f"{name.lower()}-strain-dynamics"}
         if not show_susceptibility:
             outattrs["susceptibility"] = False
-        if prevalence_scale != 1:
-            outattrs["prevalence-scale"] = prevalence_scale
+        if prevalence_zoom != 1:
+            outattrs["prevalence-zoom"] = prevalence_zoom
 
         with tp.teed(
             plt.subplots,
@@ -194,7 +187,6 @@ def def_plot(mcolors, mlegend_handler, mlines, plt, sns, tp):
             ncols=1,
             squeeze=False,
             figsize=figsize,
-            gridspec_kw={"height_ratios": height_ratios},
             teeplot_outattrs=outattrs,
             teeplot_show=True,
             teeplot_subdir=pathlib_stem,
@@ -245,6 +237,13 @@ def def_plot(mcolors, mlegend_handler, mlines, plt, sns, tp):
             )
             ax_prev.set_ylabel("Strain\nPrevalence")
             ax_prev.set_xlabel("Time")
+            # Magnify the prevalence y-axis, clipping tall early peaks so
+            # later low-prevalence dynamics are legible.
+            if prevalence_zoom != 1:
+                ybottom, ytop = ax_prev.get_ylim()
+                ax_prev.set_ylim(
+                    ybottom, ybottom + (ytop - ybottom) / prevalence_zoom
+                )
             if legend_ax is None:
                 legend_ax = ax_prev
 
@@ -352,7 +351,7 @@ def plot_fig5(fetch_osf, pathlib, plot_manuscript_figure):
         3000,
         pathlib.Path(__file__).stem,
         show_susceptibility=False,
-        prevalence_scale=2,
+        prevalence_zoom=2,
     )
     return
 
@@ -367,7 +366,7 @@ def plot_fig6(fetch_osf, pathlib, plot_manuscript_figure):
         "Fig6",
         3000,
         pathlib.Path(__file__).stem,
-        prevalence_scale=2,
+        prevalence_zoom=2,
     )
     return
 
@@ -396,7 +395,7 @@ def plot_fig8(fetch_osf, pathlib, plot_manuscript_figure):
         "Fig8",
         3000,
         pathlib.Path(__file__).stem,
-        prevalence_scale=2,
+        prevalence_zoom=2,
     )
     return
 
