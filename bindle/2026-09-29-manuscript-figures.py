@@ -207,14 +207,25 @@ def def_plot(mcolors, mlegend_handler, mlines, mticker, plt, sns, tp):
                     solid_capstyle="round",
                 )
                 handles[i] = (solid_proxy, handle)
-        if location == "right":
-            # Single column beside the axes, titled "Strain".
+        if location != "top":
+            # Single column titled "Strain", either beside the axes or
+            # centered in a spare axes passed as location.
+            if location == "right":
+                placement = {
+                    "loc": "center left",
+                    "bbox_to_anchor": (1.0, 0.5),
+                }
+            else:
+                placement = {
+                    "loc": "center",
+                    "bbox_to_anchor": location.get_position().bounds,
+                    "bbox_transform": fig.transFigure,
+                }
             fig.legend(
                 handles=handles,
                 labels=labels,
                 title="Strain",
-                loc="center left",
-                bbox_to_anchor=(1.0, 0.5),
+                **placement,
                 ncol=1,
                 frameon=False,
                 handlelength=1.8,
@@ -333,17 +344,21 @@ def def_plot(mcolors, mlegend_handler, mlines, mticker, plt, sns, tp):
             add_strain_legend(fig, legend_ax, figheight)
         return fig
 
-    def plot_manuscript_panels(long_dfs, name, xmax, pathlib_stem):
-        # Render several prevalence-only datasets side by side as one
-        # figure, sharing axes and a single legend. Each panel is a
-        # third narrower than a standalone prevalence figure.
-        ncols = len(long_dfs)
-        figheight = 2.2
+    def plot_manuscript_panels(long_dfs, name, xmax, pathlib_stem, ncols=None):
+        # Render several prevalence-only datasets as one figure, sharing
+        # axes and a single legend, in a grid of ncols columns (default:
+        # one row). Each panel is a third narrower than a standalone
+        # prevalence figure. With spare grid cells, the legend fills the
+        # first one; otherwise it sits to the right in one column.
+        npanels = len(long_dfs)
+        ncols = npanels if ncols is None else ncols
+        nrows = -(-npanels // ncols)
+        figheight = 2.2 * nrows
         figsize = (4.6 * (2 / 3) * ncols, figheight)
 
         with tp.teed(
             plt.subplots,
-            nrows=1,
+            nrows=nrows,
             ncols=ncols,
             sharex=True,
             sharey=True,
@@ -353,7 +368,7 @@ def def_plot(mcolors, mlegend_handler, mlines, mticker, plt, sns, tp):
             teeplot_show=True,
             teeplot_subdir=pathlib_stem,
         ) as (fig, axes_grid):
-            axes = axes_grid[0, :]
+            axes = axes_grid.flatten()
             for i, (ax, long_df) in enumerate(zip(axes, long_dfs)):
                 sns.lineplot(
                     data=long_df[long_df["quantity"] == "prevalence"],
@@ -369,12 +384,21 @@ def def_plot(mcolors, mlegend_handler, mlines, mticker, plt, sns, tp):
                     legend=(i == 0),
                     ax=ax,
                 )
-                ax.set_xlabel("Time")
-                if i == 0:
+                # Label only outer edges: y on the left column, x on
+                # panels with no panel below them.
+                if i % ncols == 0:
                     ax.set_ylabel("Strain\nPrevalence")
                 else:
                     ax.set_ylabel("")
                     ax.tick_params(axis="y", labelleft=False)
+                if i + ncols >= npanels:
+                    ax.set_xlabel("Time")
+                    # Shared-x subplots hide labels above the bottom row.
+                    ax.xaxis.label.set_visible(True)
+                    ax.tick_params(axis="x", labelbottom=True)
+                else:
+                    ax.set_xlabel("")
+                    ax.tick_params(axis="x", labelbottom=False)
                 style_dotted_strain(ax)
                 ax.set_xlim(left=0, right=xmax)
                 # Sparse ticks, dropping the right-edge tick so its label
@@ -382,10 +406,18 @@ def def_plot(mcolors, mlegend_handler, mlines, mticker, plt, sns, tp):
                 ax.xaxis.set_major_locator(
                     mticker.MaxNLocator(nbins=3, prune="upper")
                 )
+            spare_axes = axes[npanels:]
+            for ax in spare_axes:
+                ax.axis("off")
 
             sns.despine(fig=fig)
             fig.tight_layout()
-            add_strain_legend(fig, axes[0], figheight, location="right")
+            add_strain_legend(
+                fig,
+                axes[0],
+                figheight,
+                location=spare_axes[0] if len(spare_axes) else "right",
+            )
         return fig
 
     return plot_manuscript_figure, plot_manuscript_panels
@@ -638,6 +670,7 @@ def plot_fig10(fetch_osf, pathlib, plot_manuscript_panels):
         "Fig10",
         1200,
         pathlib.Path(__file__).stem,
+        ncols=2,
     )
     return
 
