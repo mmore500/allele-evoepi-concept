@@ -18,6 +18,7 @@ def import_pkg():
     import matplotlib.legend_handler as mlegend_handler
     import matplotlib.lines as mlines
     import matplotlib.pyplot as plt
+    import matplotlib.ticker as mticker
     import pandas as pd
     import requests
     import seaborn as sns
@@ -29,6 +30,7 @@ def import_pkg():
         mlegend_handler,
         mlines,
         mo,
+        mticker,
         pd,
         plt,
         requests,
@@ -87,7 +89,9 @@ def delimit_data(mo):
     center/right for joint-immunity `mij` = 0, 0.2, 0.4; 11: left/
     right for Case 1 allele-based vs. Case 2 strain-based immunity),
     split here into separate `10a`/`10b`/`10c` and `11a`/`11b` cells
-    to match how the underlying data is hosted on OSF.
+    to match how the underlying data is hosted on OSF. Combined `Fig10`
+    and `Fig11` cells also render each as a single horizontal figure
+    with shared axes and one legend.
     """)
     return
 
@@ -145,7 +149,7 @@ def delimit_plot(mo):
 
 
 @app.cell
-def def_plot(mcolors, mlegend_handler, mlines, plt, sns, tp):
+def def_plot(mcolors, mlegend_handler, mlines, mticker, plt, sns, tp):
     STRAIN_ORDER = ["02", "03", "12", "13"]
     # Same named-color palette as 2026-09-26-figrender.py, so strain
     # identity reads consistently across notebooks.
@@ -162,6 +166,62 @@ def def_plot(mcolors, mlegend_handler, mlines, plt, sns, tp):
         "13": (4, 1.5),
     }
     DOTTED_RGB = mcolors.to_rgb(PALETTE["12"])
+
+    def style_dotted_strain(ax):
+        # Widen 12's dotted line beyond the shared base linewidth so its
+        # sparser dots stay legible, and add a thin solid underlay so
+        # the trajectory still reads as continuous between dots.
+        for line in list(ax.lines):
+            if mcolors.to_rgb(line.get_color()) == DOTTED_RGB:
+                xdata, ydata = line.get_data()
+                ax.plot(
+                    xdata,
+                    ydata,
+                    color=line.get_color(),
+                    linewidth=0.6,
+                    zorder=line.get_zorder() - 0.1,
+                    solid_capstyle="round",
+                )
+                line.set_linewidth(2.8)
+
+    def add_strain_legend(fig, legend_ax, figheight):
+        # Fold the "strain" title into the legend's single row as a
+        # label-only dummy entry, rather than a separate title line.
+        legend = legend_ax.get_legend()
+        handles = legend.legend_handles
+        labels = [t.get_text() for t in legend.get_texts()]
+        legend.remove()
+        for i, (handle, label) in enumerate(zip(handles, labels)):
+            if label == "12":
+                # Denser dashes than the plotted line so the short
+                # legend key still reads clearly as dotted.
+                handle.set_linewidth(2.8)
+                handle.set_dashes([0.8, 1.2])
+                # Pair with a thin solid proxy so the key matches the
+                # plotted line's solid-underlay treatment.
+                solid_proxy = mlines.Line2D(
+                    [],
+                    [],
+                    color=handle.get_color(),
+                    linewidth=0.6,
+                    solid_capstyle="round",
+                )
+                handles[i] = (solid_proxy, handle)
+        dummy = mlines.Line2D([], [], linestyle="none", label="Strain")
+        fig.legend(
+            handles=[dummy, *handles],
+            labels=["Strain", *labels],
+            loc="upper center",
+            # Hold the legend a fixed physical distance above the axes,
+            # regardless of figure height.
+            bbox_to_anchor=(0.5, 1 + 0.23 / figheight),
+            ncol=len(labels) + 1,
+            frameon=False,
+            handlelength=1.8,
+            handletextpad=0.6,
+            columnspacing=1.2,
+            handler_map={tuple: mlegend_handler.HandlerTuple(ndivide=1)},
+        )
 
     def plot_manuscript_figure(
         long_df,
@@ -249,69 +309,71 @@ def def_plot(mcolors, mlegend_handler, mlines, plt, sns, tp):
             if legend_ax is None:
                 legend_ax = ax_prev
 
-            # Widen 12's dotted line beyond the shared base linewidth
-            # so its sparser dots stay legible, and add a thin solid
-            # underlay so the trajectory still reads as continuous
-            # between dots.
             for ax in axes:
-                for line in list(ax.lines):
-                    if mcolors.to_rgb(line.get_color()) == DOTTED_RGB:
-                        xdata, ydata = line.get_data()
-                        ax.plot(
-                            xdata,
-                            ydata,
-                            color=line.get_color(),
-                            linewidth=0.6,
-                            zorder=line.get_zorder() - 0.1,
-                            solid_capstyle="round",
-                        )
-                        line.set_linewidth(2.8)
+                style_dotted_strain(ax)
                 ax.set_xlim(left=0, right=xmax)
 
             sns.despine(fig=fig)
             fig.tight_layout()
-
-            # Fold the "strain" title into the legend's single row as
-            # a label-only dummy entry, rather than a separate title
-            # line.
-            legend = legend_ax.get_legend()
-            handles = legend.legend_handles
-            labels = [t.get_text() for t in legend.get_texts()]
-            legend.remove()
-            for i, (handle, label) in enumerate(zip(handles, labels)):
-                if label == "12":
-                    # Denser dashes than the plotted line so the
-                    # short legend key still reads clearly as dotted.
-                    handle.set_linewidth(2.8)
-                    handle.set_dashes([0.8, 1.2])
-                    # Pair with a thin solid proxy so the key matches
-                    # the plotted line's solid-underlay treatment.
-                    solid_proxy = mlines.Line2D(
-                        [],
-                        [],
-                        color=handle.get_color(),
-                        linewidth=0.6,
-                        solid_capstyle="round",
-                    )
-                    handles[i] = (solid_proxy, handle)
-            dummy = mlines.Line2D([], [], linestyle="none", label="Strain")
-            fig.legend(
-                handles=[dummy, *handles],
-                labels=["Strain", *labels],
-                loc="upper center",
-                # Hold the legend a fixed physical distance above the
-                # axes, regardless of figure height.
-                bbox_to_anchor=(0.5, 1 + 0.23 / figheight),
-                ncol=len(labels) + 1,
-                frameon=False,
-                handlelength=1.8,
-                handletextpad=0.6,
-                columnspacing=1.2,
-                handler_map={tuple: mlegend_handler.HandlerTuple(ndivide=1)},
-            )
+            add_strain_legend(fig, legend_ax, figheight)
         return fig
 
-    return (plot_manuscript_figure,)
+    def plot_manuscript_panels(long_dfs, name, xmax, pathlib_stem):
+        # Render several prevalence-only datasets side by side as one
+        # figure, sharing axes and a single legend. Each panel is a
+        # third narrower than a standalone prevalence figure.
+        ncols = len(long_dfs)
+        figheight = 2.2
+        figsize = (4.6 * (2 / 3) * ncols, figheight)
+
+        with tp.teed(
+            plt.subplots,
+            nrows=1,
+            ncols=ncols,
+            sharex=True,
+            sharey=True,
+            squeeze=False,
+            figsize=figsize,
+            teeplot_outattrs={"a": f"{name.lower()}-strain-dynamics"},
+            teeplot_show=True,
+            teeplot_subdir=pathlib_stem,
+        ) as (fig, axes_grid):
+            axes = axes_grid[0, :]
+            for i, (ax, long_df) in enumerate(zip(axes, long_dfs)):
+                sns.lineplot(
+                    data=long_df[long_df["quantity"] == "prevalence"],
+                    x="TIME",
+                    y="value",
+                    hue="strain",
+                    hue_order=STRAIN_ORDER,
+                    style="strain",
+                    style_order=STRAIN_ORDER,
+                    dashes=DASHES,
+                    palette=PALETTE,
+                    linewidth=1.2,
+                    legend=(i == 0),
+                    ax=ax,
+                )
+                ax.set_xlabel("Time")
+                if i == 0:
+                    ax.set_ylabel("Strain\nPrevalence")
+                else:
+                    ax.set_ylabel("")
+                    ax.tick_params(axis="y", labelleft=False)
+                style_dotted_strain(ax)
+                ax.set_xlim(left=0, right=xmax)
+                # Sparse ticks, dropping the right-edge tick so its label
+                # doesn't collide with the next panel's zero.
+                ax.xaxis.set_major_locator(
+                    mticker.MaxNLocator(nbins=3, prune="upper")
+                )
+
+            sns.despine(fig=fig)
+            fig.tight_layout()
+            add_strain_legend(fig, axes[0], figheight)
+        return fig
+
+    return plot_manuscript_figure, plot_manuscript_panels
 
 
 @app.cell
@@ -494,6 +556,35 @@ def plot_fig11b(fetch_osf, pathlib, plot_manuscript_figure):
         _long_df,
         _has_susceptibility,
         "Fig11b",
+        1200,
+        pathlib.Path(__file__).stem,
+    )
+    return
+
+
+@app.cell
+def plot_fig10(fetch_osf, pathlib, plot_manuscript_panels):
+    plot_manuscript_panels(
+        [
+            prep_long(fetch_osf("wkd37"))[0],
+            prep_long(fetch_osf("shm8d", sep="\t"))[0],
+            prep_long(fetch_osf("3uxqd"))[0],
+        ],
+        "Fig10",
+        1200,
+        pathlib.Path(__file__).stem,
+    )
+    return
+
+
+@app.cell
+def plot_fig11(fetch_osf, pathlib, plot_manuscript_panels):
+    plot_manuscript_panels(
+        [
+            prep_long(fetch_osf("zy5aq"))[0],
+            prep_long(fetch_osf("uk5sc"))[0],
+        ],
+        "Fig11",
         1200,
         pathlib.Path(__file__).stem,
     )
