@@ -496,7 +496,7 @@ def plot_fig9(fetch_osf, pathlib, plot_manuscript_figure):
 def plot_fig10a(fetch_osf, pathlib, plot_manuscript_figure):
     _df = fetch_osf("wkd37")
     _long_df, _has_susceptibility = prep_long(_df)
-    plot_manuscript_figure(
+    fig10a = plot_manuscript_figure(
         _long_df,
         _has_susceptibility,
         "Fig10a",
@@ -510,7 +510,7 @@ def plot_fig10a(fetch_osf, pathlib, plot_manuscript_figure):
 def plot_fig10b(fetch_osf, pathlib, plot_manuscript_figure):
     _df = fetch_osf("shm8d", sep="\t")
     _long_df, _has_susceptibility = prep_long(_df)
-    plot_manuscript_figure(
+    fig10b = plot_manuscript_figure(
         _long_df,
         _has_susceptibility,
         "Fig10b",
@@ -524,7 +524,7 @@ def plot_fig10b(fetch_osf, pathlib, plot_manuscript_figure):
 def plot_fig10c(fetch_osf, pathlib, plot_manuscript_figure):
     _df = fetch_osf("3uxqd")
     _long_df, _has_susceptibility = prep_long(_df)
-    plot_manuscript_figure(
+    fig10c = plot_manuscript_figure(
         _long_df,
         _has_susceptibility,
         "Fig10c",
@@ -538,7 +538,7 @@ def plot_fig10c(fetch_osf, pathlib, plot_manuscript_figure):
 def plot_fig11a(fetch_osf, pathlib, plot_manuscript_figure):
     _df = fetch_osf("zy5aq")
     _long_df, _has_susceptibility = prep_long(_df)
-    plot_manuscript_figure(
+    fig11a = plot_manuscript_figure(
         _long_df,
         _has_susceptibility,
         "Fig11a",
@@ -552,12 +552,62 @@ def plot_fig11a(fetch_osf, pathlib, plot_manuscript_figure):
 def plot_fig11b(fetch_osf, pathlib, plot_manuscript_figure):
     _df = fetch_osf("uk5sc")
     _long_df, _has_susceptibility = prep_long(_df)
-    plot_manuscript_figure(
+    fig11b = plot_manuscript_figure(
         _long_df,
         _has_susceptibility,
         "Fig11b",
         1200,
         pathlib.Path(__file__).stem,
+    )
+    return
+
+
+@app.cell
+def def_concat(pathlib):
+    from PIL import Image
+
+    def concat_panel_renders(names, name, pathlib_stem):
+        # Paste standalone panel renders side by side as-is, each with
+        # its own legend and axes, into one image named for the figure.
+        outdir = pathlib.Path("teeplots") / pathlib_stem
+        images = [
+            Image.open(
+                outdir / f"a={n.lower()}-strain-dynamics+viz=subplots+ext=.png"
+            ).convert("RGB")
+            for n in names
+        ]
+        width = sum(im.width for im in images)
+        height = max(im.height for im in images)
+        canvas = Image.new("RGB", (width, height), "white")
+        x = 0
+        for im in images:
+            canvas.paste(im, (x, (height - im.height) // 2))
+            x += im.width
+        dpi = images[0].info.get("dpi", (300, 300))
+        for ext in ".png", ".pdf":
+            outpath = (
+                outdir
+                / f"a={name.lower()}-strain-dynamics+viz=concat+ext={ext}"
+            )
+            canvas.save(outpath, dpi=dpi)
+            print(outpath)
+        return canvas
+
+    return (concat_panel_renders,)
+
+
+@app.cell
+def concat_fig10(concat_panel_renders, pathlib):
+    concat_panel_renders(
+        ["Fig10a", "Fig10b", "Fig10c"], "Fig10", pathlib.Path(__file__).stem
+    )
+    return
+
+
+@app.cell
+def concat_fig11(concat_panel_renders, pathlib):
+    concat_panel_renders(
+        ["Fig11a", "Fig11b"], "Fig11", pathlib.Path(__file__).stem
     )
     return
 
