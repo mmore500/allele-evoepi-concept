@@ -411,7 +411,8 @@ def def_plot(mcolors, mlegend_handler, mlines, mticker, plt, sns, tp):
                 ax.axis("off")
 
             sns.despine(fig=fig)
-            fig.tight_layout()
+            # Snug inter-panel padding (in font-size units).
+            fig.tight_layout(h_pad=0.2, w_pad=0.4)
             add_strain_legend(
                 fig,
                 axes[0],
