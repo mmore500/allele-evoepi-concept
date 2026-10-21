@@ -184,7 +184,7 @@ def def_plot(mcolors, mlegend_handler, mlines, mticker, plt, sns, tp):
                 )
                 line.set_linewidth(2.8)
 
-    def add_strain_legend(fig, legend_ax, figheight, location="top"):
+    def add_strain_legend(fig, legend_ax, figheight):
         # Fold the "strain" title into the legend's single row as a
         # label-only dummy entry, rather than a separate title line.
         legend = legend_ax.get_legend()
@@ -207,21 +207,6 @@ def def_plot(mcolors, mlegend_handler, mlines, mticker, plt, sns, tp):
                     solid_capstyle="round",
                 )
                 handles[i] = (solid_proxy, handle)
-        if location == "right":
-            # Single column beside the axes, titled "Strain".
-            fig.legend(
-                handles=handles,
-                labels=labels,
-                title="Strain",
-                loc="center left",
-                bbox_to_anchor=(1.0, 0.5),
-                ncol=1,
-                frameon=False,
-                handlelength=1.8,
-                handletextpad=0.6,
-                handler_map={tuple: mlegend_handler.HandlerTuple(ndivide=1)},
-            )
-            return
         dummy = mlines.Line2D([], [], linestyle="none", label="Strain")
         fig.legend(
             handles=[dummy, *handles],
@@ -385,7 +370,7 @@ def def_plot(mcolors, mlegend_handler, mlines, mticker, plt, sns, tp):
 
             sns.despine(fig=fig)
             fig.tight_layout()
-            add_strain_legend(fig, axes[0], figheight, location="right")
+            add_strain_legend(fig, axes[0], figheight)
         return fig
 
     return plot_manuscript_figure, plot_manuscript_panels
@@ -511,7 +496,7 @@ def plot_fig9(fetch_osf, pathlib, plot_manuscript_figure):
 def plot_fig10a(fetch_osf, pathlib, plot_manuscript_figure):
     _df = fetch_osf("wkd37")
     _long_df, _has_susceptibility = prep_long(_df)
-    fig10a = plot_manuscript_figure(
+    plot_manuscript_figure(
         _long_df,
         _has_susceptibility,
         "Fig10a",
@@ -525,7 +510,7 @@ def plot_fig10a(fetch_osf, pathlib, plot_manuscript_figure):
 def plot_fig10b(fetch_osf, pathlib, plot_manuscript_figure):
     _df = fetch_osf("shm8d", sep="\t")
     _long_df, _has_susceptibility = prep_long(_df)
-    fig10b = plot_manuscript_figure(
+    plot_manuscript_figure(
         _long_df,
         _has_susceptibility,
         "Fig10b",
@@ -539,7 +524,7 @@ def plot_fig10b(fetch_osf, pathlib, plot_manuscript_figure):
 def plot_fig10c(fetch_osf, pathlib, plot_manuscript_figure):
     _df = fetch_osf("3uxqd")
     _long_df, _has_susceptibility = prep_long(_df)
-    fig10c = plot_manuscript_figure(
+    plot_manuscript_figure(
         _long_df,
         _has_susceptibility,
         "Fig10c",
@@ -553,7 +538,7 @@ def plot_fig10c(fetch_osf, pathlib, plot_manuscript_figure):
 def plot_fig11a(fetch_osf, pathlib, plot_manuscript_figure):
     _df = fetch_osf("zy5aq")
     _long_df, _has_susceptibility = prep_long(_df)
-    fig11a = plot_manuscript_figure(
+    plot_manuscript_figure(
         _long_df,
         _has_susceptibility,
         "Fig11a",
@@ -567,62 +552,12 @@ def plot_fig11a(fetch_osf, pathlib, plot_manuscript_figure):
 def plot_fig11b(fetch_osf, pathlib, plot_manuscript_figure):
     _df = fetch_osf("uk5sc")
     _long_df, _has_susceptibility = prep_long(_df)
-    fig11b = plot_manuscript_figure(
+    plot_manuscript_figure(
         _long_df,
         _has_susceptibility,
         "Fig11b",
         1200,
         pathlib.Path(__file__).stem,
-    )
-    return
-
-
-@app.cell
-def def_concat(pathlib):
-    from PIL import Image
-
-    def concat_panel_renders(names, name, pathlib_stem):
-        # Paste standalone panel renders side by side as-is, each with
-        # its own legend and axes, into one image named for the figure.
-        outdir = pathlib.Path("teeplots") / pathlib_stem
-        images = [
-            Image.open(
-                outdir / f"a={n.lower()}-strain-dynamics+viz=subplots+ext=.png"
-            ).convert("RGB")
-            for n in names
-        ]
-        width = sum(im.width for im in images)
-        height = max(im.height for im in images)
-        canvas = Image.new("RGB", (width, height), "white")
-        x = 0
-        for im in images:
-            canvas.paste(im, (x, (height - im.height) // 2))
-            x += im.width
-        dpi = images[0].info.get("dpi", (300, 300))
-        for ext in ".png", ".pdf":
-            outpath = (
-                outdir
-                / f"a={name.lower()}-strain-dynamics+viz=concat+ext={ext}"
-            )
-            canvas.save(outpath, dpi=dpi)
-            print(outpath)
-        return canvas
-
-    return (concat_panel_renders,)
-
-
-@app.cell
-def concat_fig10(concat_panel_renders, pathlib):
-    concat_panel_renders(
-        ["Fig10a", "Fig10b", "Fig10c"], "Fig10", pathlib.Path(__file__).stem
-    )
-    return
-
-
-@app.cell
-def concat_fig11(concat_panel_renders, pathlib):
-    concat_panel_renders(
-        ["Fig11a", "Fig11b"], "Fig11", pathlib.Path(__file__).stem
     )
     return
 
