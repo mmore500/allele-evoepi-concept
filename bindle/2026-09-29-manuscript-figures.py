@@ -184,7 +184,7 @@ def def_plot(mcolors, mlegend_handler, mlines, mticker, plt, sns, tp):
                 )
                 line.set_linewidth(2.8)
 
-    def add_strain_legend(fig, legend_ax, figheight):
+    def add_strain_legend(fig, legend_ax, figheight, location="top"):
         # Fold the "strain" title into the legend's single row as a
         # label-only dummy entry, rather than a separate title line.
         legend = legend_ax.get_legend()
@@ -207,6 +207,21 @@ def def_plot(mcolors, mlegend_handler, mlines, mticker, plt, sns, tp):
                     solid_capstyle="round",
                 )
                 handles[i] = (solid_proxy, handle)
+        if location == "right":
+            # Single column beside the axes, titled "Strain".
+            fig.legend(
+                handles=handles,
+                labels=labels,
+                title="Strain",
+                loc="center left",
+                bbox_to_anchor=(1.0, 0.5),
+                ncol=1,
+                frameon=False,
+                handlelength=1.8,
+                handletextpad=0.6,
+                handler_map={tuple: mlegend_handler.HandlerTuple(ndivide=1)},
+            )
+            return
         dummy = mlines.Line2D([], [], linestyle="none", label="Strain")
         fig.legend(
             handles=[dummy, *handles],
@@ -370,7 +385,7 @@ def def_plot(mcolors, mlegend_handler, mlines, mticker, plt, sns, tp):
 
             sns.despine(fig=fig)
             fig.tight_layout()
-            add_strain_legend(fig, axes[0], figheight)
+            add_strain_legend(fig, axes[0], figheight, location="right")
         return fig
 
     return plot_manuscript_figure, plot_manuscript_panels
