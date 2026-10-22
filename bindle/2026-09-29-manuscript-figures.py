@@ -208,27 +208,33 @@ def def_plot(mcolors, mlegend_handler, mlines, mticker, plt, sns, tp):
                 )
                 handles[i] = (solid_proxy, handle)
         if location != "top":
-            # Single column titled "Strain", either beside the axes or
-            # centered in a spare axes passed as location.
+            # Titled "Strain", either a single column beside the axes or
+            # an enlarged two-column key centered in a figure-coordinate
+            # (x0, y0, width, height) region passed as location.
             if location == "right":
                 placement = {
                     "loc": "center left",
                     "bbox_to_anchor": (1.0, 0.5),
+                    "ncol": 1,
+                    "handlelength": 1.8,
                 }
             else:
                 placement = {
                     "loc": "center",
-                    "bbox_to_anchor": location.get_position().bounds,
+                    "bbox_to_anchor": location,
                     "bbox_transform": fig.transFigure,
+                    "ncol": 2,
+                    "fontsize": "large",
+                    "title_fontsize": "large",
+                    "handlelength": 2.2,
+                    "columnspacing": 1.4,
                 }
             fig.legend(
                 handles=handles,
                 labels=labels,
                 title="Strain",
                 **placement,
-                ncol=1,
                 frameon=False,
-                handlelength=1.8,
                 handletextpad=0.6,
                 handler_map={tuple: mlegend_handler.HandlerTuple(ndivide=1)},
             )
@@ -347,14 +353,14 @@ def def_plot(mcolors, mlegend_handler, mlines, mticker, plt, sns, tp):
     def plot_manuscript_panels(long_dfs, name, xmax, pathlib_stem, ncols=None):
         # Render several prevalence-only datasets as one figure, sharing
         # axes and a single legend, in a grid of ncols columns (default:
-        # one row). Each panel is a third narrower than a standalone
+        # one row). Each panel is a quarter narrower than a standalone
         # prevalence figure. With spare grid cells, the legend fills the
         # first one; otherwise it sits to the right in one column.
         npanels = len(long_dfs)
         ncols = npanels if ncols is None else ncols
         nrows = -(-npanels // ncols)
         figheight = 2.2 * nrows
-        figsize = (4.6 * (2 / 3) * ncols, figheight)
+        figsize = (4.6 * 0.75 * ncols, figheight)
 
         with tp.teed(
             plt.subplots,
@@ -413,12 +419,28 @@ def def_plot(mcolors, mlegend_handler, mlines, mticker, plt, sns, tp):
             sns.despine(fig=fig)
             # Snug inter-panel padding (in font-size units).
             fig.tight_layout(h_pad=0.2, w_pad=0.4)
-            add_strain_legend(
-                fig,
-                axes[0],
-                figheight,
-                location=spare_axes[0] if len(spare_axes) else "right",
-            )
+            if len(spare_axes):
+                # Close the row gap reserved for x labels of panels above
+                # spare cells; those labels hang into the empty cell.
+                fig.subplots_adjust(hspace=0.08)
+            if len(spare_axes):
+                # Center the legend in the visibly empty part of the first
+                # spare cell: below labels of the panel above it, down to
+                # the bottom of labels of the panel beside it.
+                renderer = fig.canvas.get_renderer()
+                to_fig = fig.transFigure.inverted()
+
+                def lowest_extent(ax):
+                    pixel_y = ax.get_tightbbox(renderer).y0
+                    return to_fig.transform((0, pixel_y))[1]
+
+                spare = spare_axes[0].get_position()
+                top = lowest_extent(axes[npanels - ncols])
+                bottom = lowest_extent(axes[npanels - 1])
+                location = (spare.x0, bottom, spare.width, top - bottom)
+            else:
+                location = "right"
+            add_strain_legend(fig, axes[0], figheight, location=location)
         return fig
 
     return plot_manuscript_figure, plot_manuscript_panels
