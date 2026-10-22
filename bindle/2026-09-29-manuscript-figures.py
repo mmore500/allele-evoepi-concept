@@ -347,14 +347,14 @@ def def_plot(mcolors, mlegend_handler, mlines, mticker, plt, sns, tp):
     def plot_manuscript_panels(long_dfs, name, xmax, pathlib_stem, ncols=None):
         # Render several prevalence-only datasets as one figure, sharing
         # axes and a single legend, in a grid of ncols columns (default:
-        # one row). Each panel is a third narrower than a standalone
+        # one row). Each panel is a quarter narrower than a standalone
         # prevalence figure. With spare grid cells, the legend fills the
         # first one; otherwise it sits to the right in one column.
         npanels = len(long_dfs)
         ncols = npanels if ncols is None else ncols
         nrows = -(-npanels // ncols)
         figheight = 2.2 * nrows
-        figsize = (4.6 * (2 / 3) * ncols, figheight)
+        figsize = (4.6 * 0.75 * ncols, figheight)
 
         with tp.teed(
             plt.subplots,
@@ -411,7 +411,8 @@ def def_plot(mcolors, mlegend_handler, mlines, mticker, plt, sns, tp):
                 ax.axis("off")
 
             sns.despine(fig=fig)
-            fig.tight_layout()
+            # Snug inter-panel padding (in font-size units).
+            fig.tight_layout(h_pad=0.2, w_pad=0.4)
             add_strain_legend(
                 fig,
                 axes[0],
