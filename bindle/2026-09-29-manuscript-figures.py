@@ -208,33 +208,27 @@ def def_plot(mcolors, mlegend_handler, mlines, mticker, plt, sns, tp):
                 )
                 handles[i] = (solid_proxy, handle)
         if location != "top":
-            # Titled "Strain", either a single column beside the axes or
-            # an enlarged two-column key centered in a spare axes passed
-            # as location.
+            # Single column titled "Strain", either beside the axes or
+            # centered in a spare axes passed as location.
             if location == "right":
                 placement = {
                     "loc": "center left",
                     "bbox_to_anchor": (1.0, 0.5),
-                    "ncol": 1,
-                    "handlelength": 1.8,
                 }
             else:
                 placement = {
                     "loc": "center",
                     "bbox_to_anchor": location.get_position().bounds,
                     "bbox_transform": fig.transFigure,
-                    "ncol": 2,
-                    "fontsize": "x-large",
-                    "title_fontsize": "x-large",
-                    "handlelength": 2.6,
-                    "columnspacing": 1.6,
                 }
             fig.legend(
                 handles=handles,
                 labels=labels,
                 title="Strain",
                 **placement,
+                ncol=1,
                 frameon=False,
+                handlelength=1.8,
                 handletextpad=0.6,
                 handler_map={tuple: mlegend_handler.HandlerTuple(ndivide=1)},
             )
@@ -353,14 +347,14 @@ def def_plot(mcolors, mlegend_handler, mlines, mticker, plt, sns, tp):
     def plot_manuscript_panels(long_dfs, name, xmax, pathlib_stem, ncols=None):
         # Render several prevalence-only datasets as one figure, sharing
         # axes and a single legend, in a grid of ncols columns (default:
-        # one row). Each panel is a quarter narrower than a standalone
+        # one row). Each panel is a third narrower than a standalone
         # prevalence figure. With spare grid cells, the legend fills the
         # first one; otherwise it sits to the right in one column.
         npanels = len(long_dfs)
         ncols = npanels if ncols is None else ncols
         nrows = -(-npanels // ncols)
         figheight = 2.2 * nrows
-        figsize = (4.6 * 0.75 * ncols, figheight)
+        figsize = (4.6 * (2 / 3) * ncols, figheight)
 
         with tp.teed(
             plt.subplots,
@@ -417,12 +411,7 @@ def def_plot(mcolors, mlegend_handler, mlines, mticker, plt, sns, tp):
                 ax.axis("off")
 
             sns.despine(fig=fig)
-            # Snug inter-panel padding (in font-size units).
-            fig.tight_layout(h_pad=0.2, w_pad=0.4)
-            if len(spare_axes):
-                # Close the row gap reserved for x labels of panels above
-                # spare cells; those labels hang into the empty cell.
-                fig.subplots_adjust(hspace=0.08)
+            fig.tight_layout()
             add_strain_legend(
                 fig,
                 axes[0],
