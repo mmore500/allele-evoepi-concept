@@ -209,8 +209,8 @@ def def_plot(mcolors, mlegend_handler, mlines, mticker, plt, sns, tp):
                 handles[i] = (solid_proxy, handle)
         if location != "top":
             # Titled "Strain", either a single column beside the axes or
-            # an enlarged two-column key centered in a spare axes passed
-            # as location.
+            # an enlarged two-column key centered in a figure-coordinate
+            # (x0, y0, width, height) region passed as location.
             if location == "right":
                 placement = {
                     "loc": "center left",
@@ -221,13 +221,13 @@ def def_plot(mcolors, mlegend_handler, mlines, mticker, plt, sns, tp):
             else:
                 placement = {
                     "loc": "center",
-                    "bbox_to_anchor": location.get_position().bounds,
+                    "bbox_to_anchor": location,
                     "bbox_transform": fig.transFigure,
                     "ncol": 2,
-                    "fontsize": "x-large",
-                    "title_fontsize": "x-large",
-                    "handlelength": 2.6,
-                    "columnspacing": 1.6,
+                    "fontsize": "large",
+                    "title_fontsize": "large",
+                    "handlelength": 2.2,
+                    "columnspacing": 1.4,
                 }
             fig.legend(
                 handles=handles,
@@ -423,12 +423,24 @@ def def_plot(mcolors, mlegend_handler, mlines, mticker, plt, sns, tp):
                 # Close the row gap reserved for x labels of panels above
                 # spare cells; those labels hang into the empty cell.
                 fig.subplots_adjust(hspace=0.08)
-            add_strain_legend(
-                fig,
-                axes[0],
-                figheight,
-                location=spare_axes[0] if len(spare_axes) else "right",
-            )
+            if len(spare_axes):
+                # Center the legend in the visibly empty part of the first
+                # spare cell: below labels of the panel above it, down to
+                # the bottom of labels of the panel beside it.
+                renderer = fig.canvas.get_renderer()
+                to_fig = fig.transFigure.inverted()
+
+                def lowest_extent(ax):
+                    pixel_y = ax.get_tightbbox(renderer).y0
+                    return to_fig.transform((0, pixel_y))[1]
+
+                spare = spare_axes[0].get_position()
+                top = lowest_extent(axes[npanels - ncols])
+                bottom = lowest_extent(axes[npanels - 1])
+                location = (spare.x0, bottom, spare.width, top - bottom)
+            else:
+                location = "right"
+            add_strain_legend(fig, axes[0], figheight, location=location)
         return fig
 
     return plot_manuscript_figure, plot_manuscript_panels
