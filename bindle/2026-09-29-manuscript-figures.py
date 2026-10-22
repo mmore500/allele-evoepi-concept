@@ -208,27 +208,33 @@ def def_plot(mcolors, mlegend_handler, mlines, mticker, plt, sns, tp):
                 )
                 handles[i] = (solid_proxy, handle)
         if location != "top":
-            # Single column titled "Strain", either beside the axes or
-            # centered in a spare axes passed as location.
+            # Titled "Strain", either a single column beside the axes or
+            # an enlarged two-column key centered in a spare axes passed
+            # as location.
             if location == "right":
                 placement = {
                     "loc": "center left",
                     "bbox_to_anchor": (1.0, 0.5),
+                    "ncol": 1,
+                    "handlelength": 1.8,
                 }
             else:
                 placement = {
                     "loc": "center",
                     "bbox_to_anchor": location.get_position().bounds,
                     "bbox_transform": fig.transFigure,
+                    "ncol": 2,
+                    "fontsize": "x-large",
+                    "title_fontsize": "x-large",
+                    "handlelength": 2.6,
+                    "columnspacing": 1.6,
                 }
             fig.legend(
                 handles=handles,
                 labels=labels,
                 title="Strain",
                 **placement,
-                ncol=1,
                 frameon=False,
-                handlelength=1.8,
                 handletextpad=0.6,
                 handler_map={tuple: mlegend_handler.HandlerTuple(ndivide=1)},
             )
