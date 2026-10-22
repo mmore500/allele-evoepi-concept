@@ -413,6 +413,10 @@ def def_plot(mcolors, mlegend_handler, mlines, mticker, plt, sns, tp):
             sns.despine(fig=fig)
             # Snug inter-panel padding (in font-size units).
             fig.tight_layout(h_pad=0.2, w_pad=0.4)
+            if len(spare_axes):
+                # Close the row gap reserved for x labels of panels above
+                # spare cells; those labels hang into the empty cell.
+                fig.subplots_adjust(hspace=0.08)
             add_strain_legend(
                 fig,
                 axes[0],
