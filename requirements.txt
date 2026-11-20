@@ -115,6 +115,8 @@ idna==3.16
     #   yarl
 igraph==0.11.9
     # via -r requirements.in
+imageio==2.37.0
+    # via -r requirements.in
 importlib-metadata==9.0.0
     # via watermark
 iniconfig==2.3.0
@@ -272,6 +274,7 @@ numpy==2.1.2
     #   downstream
     #   fishersrc
     #   hstrat
+    #   imageio
     #   iplotx
     #   matplotlib
     #   pandas
@@ -342,7 +345,9 @@ phyloframe==0.8.1
 pickleshare==0.7.5
     # via ipython
 pillow==12.2.0
-    # via matplotlib
+    # via
+    #   imageio
+    #   matplotlib
 platformdirs==4.9.6
     # via
     #   black
