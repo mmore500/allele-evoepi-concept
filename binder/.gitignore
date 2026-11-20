@@ -159,3 +159,6 @@ cython_debug/
 #.idea/
 
 # End of https://www.toptal.com/developers/gitignore/api/python
+
+# rendered frames and animations
+2026-11-15-frozenseeded-fullgrid-p2p-trait-log/
