@@ -634,7 +634,7 @@ def plot_subgrid_stacks(
                 _props,
                 colors=[palette[_k] / 255 for _k in strain_order],
                 labels=[strain_names[_k] for _k in strain_order],
-                edgecolor="gray",
+                edgecolor="none",
                 linewidth=0.2,
             )
             _ax.set_ylim(0, 1)
