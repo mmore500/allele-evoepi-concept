@@ -83,7 +83,8 @@ def delimit_intro(mo):
     clipped (wse-async-ga runtime config `nestedSubgridSizeFactor`).
 
     For each run:
-    1. animates the whole grid, sampling every 8th PE along each axis;
+    1. animates the whole grid, sampling every 8th PE along each axis, with
+       nested subgrid boundaries overlaid as gray lines;
     2. animates every full (not clipped) subgrid, resized to the same panel
        size, with subgrid sizes in columns and replicate subgrids in rows;
        subgrids show every PE, up to `subgrid_max_res` PEs per side, with
@@ -205,7 +206,7 @@ def define_subgrids(np, pl):
             },
         ).cast({"row": pl.UInt16, "col": pl.UInt16})
 
-    return (sample_tiles,)
+    return nested_subgrid_size, sample_tiles
 
 
 @app.cell
@@ -487,6 +488,8 @@ def define_helpers(imageio, np, pl):
 def animate_grid(
     configs,
     make_run_label,
+    nest_factor,
+    nested_subgrid_size,
     np,
     outdir,
     palette,
@@ -495,7 +498,9 @@ def animate_grid(
     save_animation,
     tqdm,
 ):
-    # whole grid, every grid_stride-th PE along each axis
+    # whole grid, every grid_stride-th PE along each axis, with nested
+    # subgrid boundaries as gray lines
+    _scale = 4
     for _osf_id, _run in tqdm(runs.items()):
         _config = configs.filter(pl.col("osf_id") == _osf_id).row(0, named=True)
         _label = make_run_label(_config)
@@ -509,13 +514,29 @@ def animate_grid(
         _num_cols = _tiles["col"].n_unique()
         assert len(_tiles) == _num_rows * _num_cols
         _strains = _run["strains"][:, _tiles["pe"].to_numpy()]
-        _frames = [
-            np.kron(
+
+        # gray where pixel's subgrid differs from the pixel above or left
+        _rows = _tiles["row"].to_numpy().astype(np.int64).reshape(_num_rows, _num_cols)
+        _cols = _tiles["col"].to_numpy().astype(np.int64).reshape(_num_rows, _num_cols)
+        _size = nested_subgrid_size(
+            _rows, _cols, _config["nRowSubgrid"], nest_factor
+        )
+        _subgrid = np.kron(
+            (_rows - _rows % _size) * _config["nCol"] + (_cols - _cols % _size),
+            np.ones((_scale, _scale), dtype=np.int64),
+        )
+        _boundary = np.zeros_like(_subgrid, dtype=bool)
+        _boundary[1:, :] |= _subgrid[1:, :] != _subgrid[:-1, :]
+        _boundary[:, 1:] |= _subgrid[:, 1:] != _subgrid[:, :-1]
+
+        _frames = []
+        for _s in _strains:
+            _frame = np.kron(
                 palette[_s.reshape(_num_rows, _num_cols)],
-                np.ones((4, 4, 1), dtype=np.uint8),
+                np.ones((_scale, _scale, 1), dtype=np.uint8),
             )
-            for _s in _strains
-        ]
+            _frame[_boundary] = 128
+            _frames.append(_frame)
         print(_osf_id, _label, len(_frames), _frames[0].shape)
         save_animation(
             outdir / f"a=strains-grid+{_label}+osf={_osf_id}+ext=", _frames
@@ -634,7 +655,7 @@ def plot_subgrid_stacks(
                 _props,
                 colors=[palette[_k] / 255 for _k in strain_order],
                 labels=[strain_names[_k] for _k in strain_order],
-                edgecolor="gray",
+                edgecolor="none",
                 linewidth=0.2,
             )
             _ax.set_ylim(0, 1)
