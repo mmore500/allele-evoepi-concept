@@ -78,10 +78,10 @@ def delimit_intro(mo):
     clipped (wse-async-ga runtime config `nestedSubgridSizeFactor`).
 
     For each run, animates (1) the whole grid, sampling every 8th PE along
-    each axis, and (2) every full (not clipped) subgrid, each sampled at the
-    same `nRowSubgrid` x `nRowSubgrid` resolution, so all subgrids show at
-    the same scale, with subgrid sizes in rows and replicate subgrids in
-    columns.
+    each axis, and (2) every full (not clipped) subgrid, resized to the same
+    panel size, with subgrid sizes in columns and replicate subgrids in rows.
+    Subgrids show every PE, up to `subgrid_max_res` PEs per side; larger
+    subgrids are sampled evenly down to that resolution.
 
     Colors: black, uninfected; white, wildtype; blue, site 0 mutant; red,
     site 1 mutant; purple, double mutant.
@@ -109,7 +109,7 @@ def delimit_data(mo):
 @app.cell
 def configure_data():
     # trait logger records, one OSF file per run (runtime config)
-    osf_ids = ["b4cf5"]
+    osf_ids = ["b4cf5", "r9v8f"]
 
     # wse-async-ga runtime config nestedSubgridSizeFactor of these runs,
     # which trait logger output doesn't record
@@ -117,6 +117,9 @@ def configure_data():
 
     # sample every nth PE along each axis for whole-grid animation
     grid_stride = 8
+
+    # most PEs per side to sample within each subgrid
+    subgrid_max_res = 72
 
     config_columns = [
         "dispatchSlug",
@@ -134,7 +137,7 @@ def configure_data():
         "evoepi_seed_pe_stride",
         "dstream_storage_multiplex",
     ]
-    return config_columns, grid_stride, nest_factor, osf_ids
+    return config_columns, grid_stride, nest_factor, osf_ids, subgrid_max_res
 
 
 @app.cell(hide_code=True)
@@ -160,15 +163,20 @@ def define_subgrids(np, pl):
         return size
 
     def sample_tiles(
-        n_row: int, n_col: int, base: int, factor: int, grid_stride: int
+        n_row: int,
+        n_col: int,
+        base: int,
+        factor: int,
+        grid_stride: int,
+        max_res: int,
     ) -> pl.DataFrame:
         """PEs to unpack: whole-grid sample, and each full subgrid sampled
-        at base x base resolution (subgrid_i, subgrid_j)."""
+        at up to max_res x max_res resolution (subgrid_i, subgrid_j)."""
         rows, cols = np.indices((n_row, n_col))
         size = nested_subgrid_size(rows, cols, base, factor)
         top, left = rows - rows % size, cols - cols % size
         is_full = (top + size <= n_row) & (left + size <= n_col)
-        stride = size // base
+        stride = np.maximum(size // max_res, 1)
         is_subgrid_sample = (
             is_full & ((rows - top) % stride == 0) & ((cols - left) % stride == 0)
         )
@@ -183,6 +191,7 @@ def define_subgrids(np, pl):
                 "subgrid_size": size[keep],
                 "subgrid_top": top[keep],
                 "subgrid_left": left[keep],
+                "subgrid_res": (size // stride)[keep],
                 "subgrid_i": ((rows - top) // stride)[keep],
                 "subgrid_j": ((cols - left) // stride)[keep],
             },
@@ -277,6 +286,7 @@ def unpack_data(
     osf_ids,
     pl,
     sample_tiles,
+    subgrid_max_res,
     tqdm,
     unpack_strain_timeseries,
 ):
@@ -295,6 +305,7 @@ def unpack_data(
             _config["nRowSubgrid"].item(),
             nest_factor,
             grid_stride,
+            subgrid_max_res,
         )
         _df = _df.join(_samples, on=["row", "col"])
         dfs[_osf_id] = unpack_strain_timeseries(_df).join(
@@ -427,87 +438,75 @@ def animate_subgrids(
     pl,
     save_animation,
     strain_frames,
+    subgrid_max_res,
     tqdm,
 ):
-    # every full subgrid, at same resolution; sizes in rows, replicates in cols
-    _scale, _gap, _label_width = 8, 6, 40
+    # every full subgrid, resized to same panel size; sizes in cols,
+    # replicates in rows
+    _panel_px, _gap, _label_height = 2 * subgrid_max_res, 6, 28
     _font = ImageFont.load_default(size=16)
     for _osf_id, _df in tqdm(dfs.items()):
         _config = configs.filter(pl.col("osf_id") == _osf_id).row(0, named=True)
         _label = make_run_label(_config)
-        _res = _config["nRowSubgrid"]  # sampled PEs per subgrid side
         _df = _df.filter("is_subgrid_sample")
         _subgrids = (
-            _df.select("subgrid_size", "subgrid_top", "subgrid_left")
+            _df.select("subgrid_size", "subgrid_top", "subgrid_left", "subgrid_res")
             .unique()
             .sort(pl.all())
             .with_columns(
                 replicate=pl.int_range(pl.len()).over("subgrid_size"),
+                subgrid_index=pl.int_range(pl.len()),
             )
         )
         _sizes = sorted(_subgrids["subgrid_size"].unique())
         _num_reps = _subgrids["replicate"].max() + 1
         _df = _df.join(
             _subgrids, on=["subgrid_size", "subgrid_top", "subgrid_left"]
-        ).with_columns(
-            cell=(
-                (
-                    pl.col("subgrid_size").replace_strict(
-                        _sizes, range(len(_sizes)), return_dtype=pl.Int64
-                    )
-                    * _num_reps
-                    + pl.col("replicate")
-                )
-                * _res
-                + pl.col("subgrid_i")
-            )
-            * _res
+        ).with_columns(  # sort key: subgrid, then row-major within it
+            cell=pl.col("subgrid_index") * subgrid_max_res**2
+            + pl.col("subgrid_i") * subgrid_max_res
             + pl.col("subgrid_j"),
         )
-        assert _df["cell"].n_unique() == len(_subgrids) * _res * _res
-        _cells = np.sort(_df["cell"].unique().to_numpy())
+        assert _df["cell"].n_unique() == (_subgrids["subgrid_res"] ** 2).sum()
         _strains = strain_frames(_df, "cell")
 
-        # layout: label strip, then subgrid cells, gray gaps between
-        _cell_px = _res * _scale
-        _height = len(_sizes) * (_cell_px + _gap) + _gap
-        _width = _label_width + _num_reps * (_cell_px + _gap) + _gap
+        # layout: label strip, then subgrid panels, gray gaps between
+        _height = _label_height + _num_reps * (_panel_px + _gap) + _gap
+        _width = len(_sizes) * (_panel_px + _gap) + _gap
         _height += _height % 2
         _width += _width % 2
         _background = Image.new("RGB", (_width, _height), (128, 128, 128))
         _draw = ImageDraw.Draw(_background)
-        for _k, _size in enumerate(_sizes):  # rotated row labels
+        for _k, _size in enumerate(_sizes):  # column labels
             _text = f"{_size} x {_size}"
-            _strip = Image.new("RGB", (_cell_px, _label_width), (128, 128, 128))
-            _strip_draw = ImageDraw.Draw(_strip)
-            _tw = _strip_draw.textlength(_text, font=_font)
-            _strip_draw.text(
-                ((_cell_px - _tw) / 2, (_label_width - 18) / 2),
+            _tw = _draw.textlength(_text, font=_font)
+            _draw.text(
+                (_gap + _k * (_panel_px + _gap) + (_panel_px - _tw) / 2, 6),
                 _text,
                 font=_font,
                 fill=(255, 255, 255),
             )
-            _background.paste(
-                _strip.rotate(90, expand=True),
-                (0, _gap + _k * (_cell_px + _gap)),
-            )
         _background = np.asarray(_background)
 
-        # where each subgrid's cells go
-        _size_k = _cells // (_res * _res) // _num_reps
-        _rep = _cells // (_res * _res) % _num_reps
-        _i = _cells // _res % _res
-        _j = _cells % _res
-        _y = _gap + _size_k * (_cell_px + _gap) + _i * _scale
-        _x = _label_width + _gap + _rep * (_cell_px + _gap) + _j * _scale
+        # where each subgrid's panel goes, and its columns in _strains
+        _panels = []
+        _start = 0
+        for _row in _subgrids.iter_rows(named=True):
+            _res = _row["subgrid_res"]
+            _y = _label_height + _gap + _row["replicate"] * (_panel_px + _gap)
+            _x = _gap + _sizes.index(_row["subgrid_size"]) * (_panel_px + _gap)
+            _panels.append((_y, _x, _res, slice(_start, _start + _res * _res)))
+            _start += _res * _res
 
         _frames = []
         for _s in _strains:
             _frame = _background.copy()
-            _colors = palette[_s]
-            for _dy in range(_scale):
-                for _dx in range(_scale):
-                    _frame[_y + _dy, _x + _dx] = _colors
+            for _y, _x, _res, _cols in _panels:
+                _scale = _panel_px // _res
+                _frame[_y : _y + _panel_px, _x : _x + _panel_px] = np.kron(
+                    palette[_s[_cols].reshape(_res, _res)],
+                    np.ones((_scale, _scale, 1), dtype=np.uint8),
+                )
             _frames.append(_frame)
         print(_osf_id, _label, len(_frames), _frames[0].shape)
         save_animation(
