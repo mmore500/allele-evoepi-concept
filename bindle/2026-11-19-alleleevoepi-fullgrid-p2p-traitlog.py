@@ -296,12 +296,8 @@ def animate_data(configs, dfs, imageio, np, outdir, palette, pl, tqdm):
         print(len(_frames))
         _outpath = outdir / f"a=strains+{_label}+osf={_osf_id}+ext="
         imageio.mimsave(f"{_outpath}.gif", _frames, duration=0.05, loop=0)
-        # mp4 lasts 15 seconds, whatever its number of frames
         imageio.mimsave(
-            f"{_outpath}.mp4",
-            _frames,
-            fps=len(_frames) / 15,
-            macro_block_size=1,
+            f"{_outpath}.mp4", _frames, fps=30, macro_block_size=1
         )
     return
 
