@@ -16,13 +16,16 @@ def import_pkg():
     import downstream
     import imageio
     import marimo as mo
+    from matplotlib import pyplot as plt
     import numpy as np
     from PIL import Image, ImageDraw, ImageFont
     import polars as pl
+    import seaborn as sns
+    from teeplot import teeplot as tp
     from tqdm.auto import tqdm
     from watermark import watermark
 
-    from pylib.munge import addend_groups, squeeze_int, union_upsample
+    from pylib.munge import addend_groups, squeeze_int
 
     return (
         Image,
@@ -34,9 +37,11 @@ def import_pkg():
         mo,
         np,
         pl,
+        plt,
+        sns,
         squeeze_int,
+        tp,
         tqdm,
-        union_upsample,
         watermark,
     )
 
@@ -66,8 +71,8 @@ def delimit_intro(mo):
     mo.md("""
     # 2026-11-20-alleleevoepi-nestedsubgrid-p2p-traitlog
 
-    Animates strains of each PE's sampled host (0th population member)
-    over time, from the trait logger of wse-async-ga workflow
+    Strains of each PE's sampled host (0th population member) over time,
+    from the trait logger of wse-async-ga workflow
     `2026-11-20-alleleevoepi-nestedsubgrid-p2p-traitlog` (genome
     `genome_alleleevoepi_2026_11_19`, 2 sites), nested subgrid runs
     sweeping mutation rate.
@@ -77,11 +82,14 @@ def delimit_intro(mo):
     each `factor` times larger, with subgrids overhanging the grid edge
     clipped (wse-async-ga runtime config `nestedSubgridSizeFactor`).
 
-    For each run, animates (1) the whole grid, sampling every 8th PE along
-    each axis, and (2) every full (not clipped) subgrid, resized to the same
-    panel size, with subgrid sizes in columns and replicate subgrids in rows.
-    Subgrids show every PE, up to `subgrid_max_res` PEs per side; larger
-    subgrids are sampled evenly down to that resolution.
+    For each run:
+    1. animates the whole grid, sampling every 8th PE along each axis;
+    2. animates every full (not clipped) subgrid, resized to the same panel
+       size, with subgrid sizes in columns and replicate subgrids in rows;
+       subgrids show every PE, up to `subgrid_max_res` PEs per side, with
+       larger subgrids sampled evenly down to that resolution;
+    3. plots, in the same trellis, each subgrid's strain proportions over
+       time as a stackplot, with and without uninfected hosts.
 
     Colors: black, uninfected; white, wildtype; blue, site 0 mutant; red,
     site 1 mutant; purple, double mutant.
@@ -95,7 +103,7 @@ def setup_outdir(pathlib):
     outdir = pathlib.Path("outdata") / nbname
     outdir.mkdir(parents=True, exist_ok=True)
     outdir
-    return (outdir,)
+    return nbname, outdir
 
 
 @app.cell(hide_code=True)
@@ -201,8 +209,9 @@ def define_subgrids(np, pl):
 
 
 @app.cell
-def define_unpack(addend_groups, downstream, pl, squeeze_int, union_upsample):
-    def unpack_strain_timeseries(df: pl.DataFrame) -> pl.DataFrame:
+def define_unpack(addend_groups, downstream, np, pl, squeeze_int):
+    def unpack_strains(df: pl.DataFrame) -> pl.DataFrame:
+        """Strain time series of PEs in df, at their own logged times."""
         # unpack dstream data items from logger hex strings, demultiplexing
         # infected, site 0 allele, and site 1 allele records
         dfu = downstream.dataframe.unpack_data_packed(df)
@@ -256,24 +265,52 @@ def define_unpack(addend_groups, downstream, pl, squeeze_int, union_upsample):
             inner_only=True,
         )
 
-        # upsample to fill in dstream_Tbar dropped by some loggers
-        df = union_upsample(
-            df,
-            upsample="dstream_Tbar",
-            group_by="tile",
-            fill_null_ops=[
-                (pl.all(), {"strategy": "forward"}),
-                (pl.all(), {"strategy": "backward"}),
-            ],
-        )
-        assert len(df["dstream_Tbar"].value_counts()["count"].unique()) == 1
-
         # 0: uninfected, 1: wildtype, 2: site 0 mutant, 3: site 1 mutant,
         # 4: double mutant
-        return df.with_columns(
-            strain=pl.col("infected")
-            * (1 + pl.col("site0") + 2 * pl.col("site1")),
+        return df.select(
+            pl.col("tile").cast(pl.UInt32),
+            pl.col("row").cast(pl.UInt16),
+            pl.col("col").cast(pl.UInt16),
+            pl.col("dstream_Tbar").cast(pl.UInt32),
+            strain=(
+                pl.col("infected") * (1 + pl.col("site0") + 2 * pl.col("site1"))
+            ).cast(pl.UInt8),
         )
+
+    def unpack_strain_timeseries(
+        df: pl.DataFrame, chunk_size: int = 2000
+    ) -> tuple:
+        """Strains of PEs in df, all at the union of their logged times.
+
+        Returns times, PEs (tile, row, col), and strains, an array indexed
+        by [time, PE]. Each PE's strain at a time is its strain at its last
+        logged time at or before (or, if none, its first logged time).
+        """
+        # unpack in chunks of PEs, to save memory
+        df = pl.concat(
+            [
+                unpack_strains(df.slice(start, chunk_size))
+                for start in range(0, len(df), chunk_size)
+            ],
+        ).sort("tile", "dstream_Tbar")
+        tiles = df.select("tile", "row", "col").unique("tile").sort("tile")
+        times = np.sort(df["dstream_Tbar"].unique().to_numpy())
+
+        # per PE, index of last logged time at or before each time (forward
+        # fill), or first logged time if none (backward fill)
+        tile_rank = np.searchsorted(tiles["tile"].to_numpy(), df["tile"].to_numpy())
+        key = tile_rank.astype(np.int64) * (len(times) + 1) + np.searchsorted(
+            times, df["dstream_Tbar"].to_numpy()
+        )
+        query = (
+            np.arange(len(tiles), dtype=np.int64)[None, :] * (len(times) + 1)
+            + np.arange(len(times), dtype=np.int64)[:, None]
+        )
+        first = np.searchsorted(tile_rank, np.arange(len(tiles)))
+        index = np.maximum(np.searchsorted(key, query, side="right") - 1, first)
+        strains = df["strain"].to_numpy()[index]
+        assert strains.shape == (len(times), len(tiles))
+        return times, tiles, strains
 
     return (unpack_strain_timeseries,)
 
@@ -291,10 +328,23 @@ def unpack_data(
     unpack_strain_timeseries,
 ):
     # read and unpack one run at a time, keeping only sampled PEs' strains
-    _configs, dfs = [], {}
+    _configs, runs = [], {}
     for _osf_id in tqdm(osf_ids):
         _df = pl.read_parquet(
             f"https://osf.io/{_osf_id}/download",
+            columns=[
+                *config_columns,
+                "tile",
+                "row",
+                "col",
+                "data_hex",
+                "dstream_algo",
+                "dstream_storage_bitoffset",
+                "dstream_storage_bitwidth",
+                "dstream_S",
+                "dstream_T_bitoffset",
+                "dstream_T_bitwidth",
+            ],
         ).with_row_index("dstream_data_id")
         _config = _df.select(config_columns).unique()
         assert len(_config) == 1
@@ -307,26 +357,44 @@ def unpack_data(
             grid_stride,
             subgrid_max_res,
         )
-        _df = _df.join(_samples, on=["row", "col"])
-        dfs[_osf_id] = unpack_strain_timeseries(_df).join(
-            _samples, on=["row", "col"]
+        # keep only sampled PEs, and only columns needed to unpack
+        _df = _df.join(_samples.select("row", "col"), on=["row", "col"]).select(
+            "dstream_data_id",
+            "tile",
+            "row",
+            "col",
+            pl.col("^dstream_.*$").exclude("dstream_data_id"),
+            "data_hex",
         )
+        _times, _tiles, _strains = unpack_strain_timeseries(_df)
         del _df
+        runs[_osf_id] = {
+            "times": _times,
+            "tiles": _tiles.join(_samples, on=["row", "col"], maintain_order="left"),
+            "strains": _strains,
+        }
+        assert len(runs[_osf_id]["tiles"]) == _strains.shape[1]
 
     configs = pl.concat(_configs)
     assert len(configs) == len(osf_ids)
     configs
-    return configs, dfs
+    return configs, runs
 
 
 @app.cell
-def count_strains(dfs, pl):
-    pl.concat(
+def count_strains(pl, runs):
+    pl.DataFrame(
         [
-            _df.group_by("strain").len().with_columns(osf_id=pl.lit(_osf_id))
-            for _osf_id, _df in dfs.items()
+            {
+                "osf_id": _osf_id,
+                **{
+                    str(_k): int((_run["strains"] == _k).sum())
+                    for _k in range(5)
+                },
+            }
+            for _osf_id, _run in runs.items()
         ],
-    ).pivot(on="strain", index="osf_id", values="len", sort_columns=True)
+    )
     return
 
 
@@ -350,11 +418,18 @@ def define_palette(np):
         ],
         dtype=np.uint8,
     )
-    return (palette,)
+    strain_names = [
+        "uninfected",
+        "wildtype",
+        "site 0 mutant",
+        "site 1 mutant",
+        "double mutant",
+    ]
+    return palette, strain_names
 
 
 @app.cell
-def define_save(imageio):
+def define_helpers(imageio, np, pl):
     def save_animation(outpath: str, frames: list) -> None:
         imageio.mimsave(f"{outpath}.gif", frames, duration=0.05, loop=0)
         # mp4 lasts 15 seconds, whatever its number of frames
@@ -365,11 +440,6 @@ def define_save(imageio):
             macro_block_size=1,
         )
 
-    return (save_animation,)
-
-
-@app.cell
-def define_label(np, pl):
     def make_run_label(config: dict) -> str:
         return (
             f"mutlog2={round(np.log2(config['evoepi_mutation_rate']))}"
@@ -378,43 +448,72 @@ def define_label(np, pl):
             f"+seed={config['globalSeed']}"
         )
 
-    def strain_frames(df: pl.DataFrame, index: str) -> np.ndarray:
-        """Strains, as array indexed by [time, index value]."""
-        df = df.sort("dstream_Tbar", index)
-        num_t = df["dstream_Tbar"].n_unique()
-        return df["strain"].to_numpy().reshape(num_t, -1).astype(np.uint8)
+    def subgrid_layout(tiles: pl.DataFrame) -> tuple:
+        """Full subgrids, with replicate (row) and size (col) trellis
+        positions, and each one's PE columns in strain arrays, row-major."""
+        tiles = tiles.with_row_index("pe").filter("is_subgrid_sample")
+        subgrids = (
+            tiles.select(
+                "subgrid_size", "subgrid_top", "subgrid_left", "subgrid_res"
+            )
+            .unique()
+            .sort(pl.all())
+            .with_columns(
+                replicate=pl.int_range(pl.len()).over("subgrid_size"),
+            )
+        )
+        sizes = sorted(subgrids["subgrid_size"].unique())
+        num_reps = subgrids["replicate"].max() + 1
+        layout = []
+        for row in subgrids.iter_rows(named=True):
+            pes = tiles.filter(
+                (pl.col("subgrid_top") == row["subgrid_top"])
+                & (pl.col("subgrid_left") == row["subgrid_left"])
+            ).sort("subgrid_i", "subgrid_j")["pe"]
+            assert len(pes) == row["subgrid_res"] ** 2
+            layout.append(
+                {
+                    **row,
+                    "size_index": sizes.index(row["subgrid_size"]),
+                    "pes": pes.to_numpy(),
+                }
+            )
+        return layout, sizes, num_reps
 
-    return make_run_label, strain_frames
+    return make_run_label, save_animation, subgrid_layout
 
 
 @app.cell
 def animate_grid(
     configs,
-    dfs,
     make_run_label,
     np,
     outdir,
     palette,
     pl,
+    runs,
     save_animation,
-    strain_frames,
     tqdm,
 ):
     # whole grid, every grid_stride-th PE along each axis
-    for _osf_id, _df in tqdm(dfs.items()):
+    for _osf_id, _run in tqdm(runs.items()):
         _config = configs.filter(pl.col("osf_id") == _osf_id).row(0, named=True)
         _label = make_run_label(_config)
-        _df = _df.filter("is_grid_sample").with_columns(
-            row_rank=pl.col("row").rank(method="dense").cast(pl.Int32) - 1,
-            col_rank=pl.col("col").rank(method="dense").cast(pl.Int32) - 1,
+        _tiles = (
+            _run["tiles"]
+            .with_row_index("pe")
+            .filter("is_grid_sample")
+            .sort("row", "col")
         )
-        _num_rows = _df["row_rank"].max() + 1
-        _num_cols = _df["col_rank"].max() + 1
-        _df = _df.with_columns(cell=pl.col("row_rank") * _num_cols + pl.col("col_rank"))
-        assert _df["cell"].n_unique() == _num_rows * _num_cols
-        _strains = strain_frames(_df, "cell").reshape(-1, _num_rows, _num_cols)
+        _num_rows = _tiles["row"].n_unique()
+        _num_cols = _tiles["col"].n_unique()
+        assert len(_tiles) == _num_rows * _num_cols
+        _strains = _run["strains"][:, _tiles["pe"].to_numpy()]
         _frames = [
-            np.kron(palette[_s], np.ones((4, 4, 1), dtype=np.uint8))
+            np.kron(
+                palette[_s.reshape(_num_rows, _num_cols)],
+                np.ones((4, 4, 1), dtype=np.uint8),
+            )
             for _s in _strains
         ]
         print(_osf_id, _label, len(_frames), _frames[0].shape)
@@ -430,14 +529,14 @@ def animate_subgrids(
     ImageDraw,
     ImageFont,
     configs,
-    dfs,
     make_run_label,
     np,
     outdir,
     palette,
     pl,
+    runs,
     save_animation,
-    strain_frames,
+    subgrid_layout,
     subgrid_max_res,
     tqdm,
 ):
@@ -445,30 +544,10 @@ def animate_subgrids(
     # replicates in rows
     _panel_px, _gap, _label_height = 2 * subgrid_max_res, 6, 28
     _font = ImageFont.load_default(size=16)
-    for _osf_id, _df in tqdm(dfs.items()):
+    for _osf_id, _run in tqdm(runs.items()):
         _config = configs.filter(pl.col("osf_id") == _osf_id).row(0, named=True)
         _label = make_run_label(_config)
-        _df = _df.filter("is_subgrid_sample")
-        _subgrids = (
-            _df.select("subgrid_size", "subgrid_top", "subgrid_left", "subgrid_res")
-            .unique()
-            .sort(pl.all())
-            .with_columns(
-                replicate=pl.int_range(pl.len()).over("subgrid_size"),
-                subgrid_index=pl.int_range(pl.len()),
-            )
-        )
-        _sizes = sorted(_subgrids["subgrid_size"].unique())
-        _num_reps = _subgrids["replicate"].max() + 1
-        _df = _df.join(
-            _subgrids, on=["subgrid_size", "subgrid_top", "subgrid_left"]
-        ).with_columns(  # sort key: subgrid, then row-major within it
-            cell=pl.col("subgrid_index") * subgrid_max_res**2
-            + pl.col("subgrid_i") * subgrid_max_res
-            + pl.col("subgrid_j"),
-        )
-        assert _df["cell"].n_unique() == (_subgrids["subgrid_res"] ** 2).sum()
-        _strains = strain_frames(_df, "cell")
+        _layout, _sizes, _num_reps = subgrid_layout(_run["tiles"])
 
         # layout: label strip, then subgrid panels, gray gaps between
         _height = _label_height + _num_reps * (_panel_px + _gap) + _gap
@@ -488,23 +567,18 @@ def animate_subgrids(
             )
         _background = np.asarray(_background)
 
-        # where each subgrid's panel goes, and its columns in _strains
-        _panels = []
-        _start = 0
-        for _row in _subgrids.iter_rows(named=True):
-            _res = _row["subgrid_res"]
-            _y = _label_height + _gap + _row["replicate"] * (_panel_px + _gap)
-            _x = _gap + _sizes.index(_row["subgrid_size"]) * (_panel_px + _gap)
-            _panels.append((_y, _x, _res, slice(_start, _start + _res * _res)))
-            _start += _res * _res
-
         _frames = []
-        for _s in _strains:
+        for _s in _run["strains"]:
             _frame = _background.copy()
-            for _y, _x, _res, _cols in _panels:
+            for _sub in _layout:
+                _res = _sub["subgrid_res"]
                 _scale = _panel_px // _res
-                _frame[_y : _y + _panel_px, _x : _x + _panel_px] = np.kron(
-                    palette[_s[_cols].reshape(_res, _res)],
+                _y = _label_height + _gap + _sub["replicate"] * (_panel_px + _gap)
+                _x = _gap + _sub["size_index"] * (_panel_px + _gap)
+                _frame[
+                    _y : _y + _res * _scale, _x : _x + _res * _scale
+                ] = np.kron(
+                    palette[_s[_sub["pes"]].reshape(_res, _res)],
                     np.ones((_scale, _scale, 1), dtype=np.uint8),
                 )
             _frames.append(_frame)
@@ -512,6 +586,109 @@ def animate_subgrids(
         save_animation(
             outdir / f"a=strains-subgrids+{_label}+osf={_osf_id}+ext=", _frames
         )
+    return
+
+
+@app.cell(hide_code=True)
+def delimit_plot(mo):
+    mo.md("""
+    ## Plot Data
+    """)
+    return
+
+
+@app.cell
+def plot_subgrid_stacks(
+    configs,
+    make_run_label,
+    nbname,
+    np,
+    palette,
+    pl,
+    plt,
+    runs,
+    sns,
+    strain_names,
+    subgrid_layout,
+    tp,
+):
+    # each full subgrid's strain proportions over time, in same trellis as
+    # subgrid animation; with uninfected hosts (black), and among infected
+    # hosts only
+    def _plot_stacks(axes, layout, times, strains, with_uninfected):
+        strain_order = [1, 2, 3, 4] + ([0] if with_uninfected else [])
+        for _ax in axes.flat:
+            _ax.set_visible(False)
+        for _sub in layout:
+            _ax = axes[_sub["replicate"], _sub["size_index"]]
+            _ax.set_visible(True)
+            _counts = np.stack(
+                [(strains[:, _sub["pes"]] == _k).sum(axis=1) for _k in strain_order]
+            ).astype(float)
+            _total = _counts.sum(axis=0)
+            _props = np.divide(
+                _counts, _total, out=np.zeros_like(_counts), where=_total > 0
+            )
+            _ax.stackplot(
+                times,
+                _props,
+                colors=[palette[_k] / 255 for _k in strain_order],
+                labels=[strain_names[_k] for _k in strain_order],
+                edgecolor="gray",
+                linewidth=0.2,
+            )
+            _ax.set_ylim(0, 1)
+            _ax.set_xlim(times.min(), times.max())
+            _ax.set_facecolor("lightgray")
+            if _sub["replicate"] == 0:
+                _ax.set_title(f"{_sub['subgrid_size']} x {_sub['subgrid_size']}")
+        _ax = axes[0, 0]
+        _ax.figure.legend(*_ax.get_legend_handles_labels())
+        sns.move_legend(
+            _ax.figure,
+            "lower center",
+            bbox_to_anchor=(0.5, 1.0),
+            ncol=len(strain_order),
+            frameon=False,
+            title=None,
+        )
+        _ax.figure.supxlabel("Generations")
+        _ax.figure.supylabel(
+            "Proportion of Hosts" if with_uninfected
+            else "Proportion of Infected Hosts"
+        )
+
+    for _osf_id, _run in runs.items():
+        _config = configs.filter(pl.col("osf_id") == _osf_id).row(0, named=True)
+        _layout, _sizes, _num_reps = subgrid_layout(_run["tiles"])
+        for _with_uninfected in (True, False):
+            with tp.teed(
+                plt.subplots,
+                nrows=_num_reps,
+                ncols=len(_sizes),
+                figsize=(2 * len(_sizes), 1.6 * _num_reps),
+                sharex=True,
+                sharey=True,
+                squeeze=False,
+                constrained_layout=True,
+                teeplot_outattrs={
+                    "a": "strain-stacks",
+                    "osf": _osf_id,
+                    "uninfected": _with_uninfected,
+                    **dict(
+                        _kv.split("=")
+                        for _kv in make_run_label(_config).split("+")
+                    ),
+                },
+                teeplot_subdir=nbname,
+            ) as (_fig, _axes):
+                _plot_stacks(
+                    _axes,
+                    _layout,
+                    _run["times"],
+                    _run["strains"],
+                    _with_uninfected,
+                )
     return
 
 
