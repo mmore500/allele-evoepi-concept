@@ -1,10 +1,11 @@
 backstrip==0.2.4
 black==22.10.0
 Deprecated==1.2.13
-downstream==1.22.0
+downstream==1.25.0
 hstrat==1.25.0
 igraph==0.11.9
 imageio==2.37.0
+imageio-ffmpeg==0.6.0
 interval_search==0.5.2
 IPython==7.31.1
 iplotx==1.7.1
