@@ -83,7 +83,9 @@ def delimit_intro(mo):
     clipped (wse-async-ga runtime config `nestedSubgridSizeFactor`).
 
     For each run:
-    1. animates the whole grid, sampling every 8th PE along each axis;
+    1. animates the whole grid, sampling every 8th PE along each axis, with
+       nested subgrid boundaries overlaid as gray lines, transposed to
+       landscape (PE rows as columns), keeping PE (0, 0) at top left;
     2. animates every full (not clipped) subgrid, resized to the same panel
        size, with subgrid sizes in columns and replicate subgrids in rows;
        subgrids show every PE, up to `subgrid_max_res` PEs per side, with
@@ -205,7 +207,7 @@ def define_subgrids(np, pl):
             },
         ).cast({"row": pl.UInt16, "col": pl.UInt16})
 
-    return (sample_tiles,)
+    return nested_subgrid_size, sample_tiles
 
 
 @app.cell
@@ -486,7 +488,10 @@ def define_helpers(imageio, np, pl):
 @app.cell
 def animate_grid(
     configs,
+    grid_stride,
     make_run_label,
+    nest_factor,
+    nested_subgrid_size,
     np,
     outdir,
     palette,
@@ -495,7 +500,9 @@ def animate_grid(
     save_animation,
     tqdm,
 ):
-    # whole grid, every grid_stride-th PE along each axis
+    # whole grid, every grid_stride-th PE along each axis, with nested
+    # subgrid boundaries as gray lines
+    _scale = 4
     for _osf_id, _run in tqdm(runs.items()):
         _config = configs.filter(pl.col("osf_id") == _osf_id).row(0, named=True)
         _label = make_run_label(_config)
@@ -509,13 +516,44 @@ def animate_grid(
         _num_cols = _tiles["col"].n_unique()
         assert len(_tiles) == _num_rows * _num_cols
         _strains = _run["strains"][:, _tiles["pe"].to_numpy()]
-        _frames = [
-            np.kron(
+
+        # gray lines at each nested subgrid's top and left edges, at their
+        # exact PE positions, scaled to pixels
+        _stride = grid_stride  # PEs per sampled cell
+        _all_rows, _all_cols = np.indices((_config["nRow"], _config["nCol"]))
+        _size = nested_subgrid_size(
+            _all_rows, _all_cols, _config["nRowSubgrid"], nest_factor
+        )
+        _edges = np.unique(
+            np.stack(
+                [
+                    (_all_rows - _all_rows % _size).ravel(),
+                    (_all_cols - _all_cols % _size).ravel(),
+                    _size.ravel(),
+                ],
+            ),
+            axis=1,
+        )
+        _boundary = np.zeros((_num_rows * _scale, _num_cols * _scale), dtype=bool)
+        _px = lambda _pe: int(round(_pe / _stride * _scale))
+        for _top, _left, _sz in _edges.T:
+            _y0, _x0 = _px(_top), _px(_left)
+            _y1 = min(_px(_top + _sz), _boundary.shape[0])
+            _x1 = min(_px(_left + _sz), _boundary.shape[1])
+            if _top > 0 and _y0 < _boundary.shape[0]:
+                _boundary[_y0, _x0:_x1] = True
+            if _left > 0 and _x0 < _boundary.shape[1]:
+                _boundary[_y0:_y1, _x0] = True
+
+        _frames = []
+        for _s in _strains:
+            _frame = np.kron(
                 palette[_s.reshape(_num_rows, _num_cols)],
-                np.ones((4, 4, 1), dtype=np.uint8),
+                np.ones((_scale, _scale, 1), dtype=np.uint8),
             )
-            for _s in _strains
-        ]
+            _frame[_boundary] = 128
+            # landscape: transpose, keeping PE (0, 0) at top left
+            _frames.append(np.ascontiguousarray(_frame.transpose(1, 0, 2)))
         print(_osf_id, _label, len(_frames), _frames[0].shape)
         save_animation(
             outdir / f"a=strains-grid+{_label}+osf={_osf_id}+ext=", _frames
@@ -634,7 +672,7 @@ def plot_subgrid_stacks(
                 _props,
                 colors=[palette[_k] / 255 for _k in strain_order],
                 labels=[strain_names[_k] for _k in strain_order],
-                edgecolor="gray",
+                edgecolor="none",
                 linewidth=0.2,
             )
             _ax.set_ylim(0, 1)
