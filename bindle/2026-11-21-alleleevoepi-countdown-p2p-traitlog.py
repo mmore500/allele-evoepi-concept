@@ -452,15 +452,18 @@ def define_palette(np):
 
 @app.cell
 def define_helpers(imageio, np, pl):
-    def save_animation(outpath: str, frames: list) -> None:
-        imageio.mimsave(f"{outpath}.gif", frames, duration=0.05, loop=0)
+    def save_animation(outpath: str, frames, num_frames: int) -> None:
+        """Write frames, an iterable, to gif and mp4 as they're made, so
+        they needn't all fit in memory."""
         # mp4 lasts 15 seconds, whatever its number of frames
-        imageio.mimsave(
-            f"{outpath}.mp4",
-            frames,
-            fps=len(frames) / 15,
-            macro_block_size=1,
-        )
+        with imageio.get_writer(
+            f"{outpath}.gif", mode="I", duration=0.05, loop=0
+        ) as gif, imageio.get_writer(
+            f"{outpath}.mp4", fps=num_frames / 15, macro_block_size=1
+        ) as mp4:
+            for frame in frames:
+                gif.append_data(frame)
+                mp4.append_data(frame)
 
     def make_run_label(config: dict) -> str:
         return (
@@ -565,18 +568,21 @@ def animate_grid(
             if _left > 0 and _x0 < _boundary.shape[1]:
                 _boundary[_y0:_y1, _x0] = True
 
-        _frames = []
-        for _s in _strains:
-            _frame = np.kron(
-                palette[_s.reshape(_num_rows, _num_cols)],
-                np.ones((_scale, _scale, 1), dtype=np.uint8),
-            )
-            _frame[_boundary] = 128
-            # landscape: transpose, keeping PE (0, 0) at top left
-            _frames.append(np.ascontiguousarray(_frame.transpose(1, 0, 2)))
-        print(_osf_id, _label, len(_frames), _frames[0].shape)
+        def _grid_frames(strains, num_rows, num_cols, boundary):
+            for _s in strains:
+                _frame = np.kron(
+                    palette[_s.reshape(num_rows, num_cols)],
+                    np.ones((_scale, _scale, 1), dtype=np.uint8),
+                )
+                _frame[boundary] = 128
+                # landscape: transpose, keeping PE (0, 0) at top left
+                yield np.ascontiguousarray(_frame.transpose(1, 0, 2))
+
+        print(_osf_id, _label, len(_strains), _boundary.shape[::-1])
         save_animation(
-            outdir / f"a=strains-grid+{_label}+osf={_osf_id}+ext=", _frames
+            outdir / f"a=strains-grid+{_label}+osf={_osf_id}+ext=",
+            _grid_frames(_strains, _num_rows, _num_cols, _boundary),
+            len(_strains),
         )
     return
 
@@ -625,24 +631,31 @@ def animate_subgrids(
             )
         _background = np.asarray(_background)
 
-        _frames = []
-        for _s in _run["strains"]:
-            _frame = _background.copy()
-            for _sub in _layout:
-                _res = _sub["subgrid_res"]
-                _scale = _panel_px // _res
-                _y = _label_height + _gap + _sub["replicate"] * (_panel_px + _gap)
-                _x = _gap + _sub["size_index"] * (_panel_px + _gap)
-                _frame[
-                    _y : _y + _res * _scale, _x : _x + _res * _scale
-                ] = np.kron(
-                    palette[_s[_sub["pes"]].reshape(_res, _res)],
-                    np.ones((_scale, _scale, 1), dtype=np.uint8),
-                )
-            _frames.append(_frame)
-        print(_osf_id, _label, len(_frames), _frames[0].shape)
+        def _subgrid_frames(strains, layout, background):
+            for _s in strains:
+                _frame = background.copy()
+                for _sub in layout:
+                    _res = _sub["subgrid_res"]
+                    _scale = _panel_px // _res
+                    _y = (
+                        _label_height
+                        + _gap
+                        + _sub["replicate"] * (_panel_px + _gap)
+                    )
+                    _x = _gap + _sub["size_index"] * (_panel_px + _gap)
+                    _frame[
+                        _y : _y + _res * _scale, _x : _x + _res * _scale
+                    ] = np.kron(
+                        palette[_s[_sub["pes"]].reshape(_res, _res)],
+                        np.ones((_scale, _scale, 1), dtype=np.uint8),
+                    )
+                yield _frame
+
+        print(_osf_id, _label, len(_run["strains"]), _background.shape)
         save_animation(
-            outdir / f"a=strains-subgrids+{_label}+osf={_osf_id}+ext=", _frames
+            outdir / f"a=strains-subgrids+{_label}+osf={_osf_id}+ext=",
+            _subgrid_frames(_run["strains"], _layout, _background),
+            len(_run["strains"]),
         )
     return
 
