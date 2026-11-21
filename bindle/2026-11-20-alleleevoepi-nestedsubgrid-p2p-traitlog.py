@@ -83,7 +83,7 @@ def delimit_intro(mo):
     clipped (wse-async-ga runtime config `nestedSubgridSizeFactor`).
 
     For each run:
-    1. animates the whole grid, sampling every 8th PE along each axis, with
+    1. animates the whole grid, sampling every 9th PE along each axis, with
        nested subgrid boundaries overlaid as gray lines, transposed to
        landscape (PE rows as columns), keeping PE (0, 0) at top left;
     2. animates every full (not clipped) subgrid, resized to the same panel
@@ -119,14 +119,17 @@ def delimit_data(mo):
 @app.cell
 def configure_data():
     # trait logger records, one OSF file per run (runtime config)
-    osf_ids = ["b4cf5", "r9v8f"]
+    # mutation rate 2^-16, 2^-18, 2^-20, 2^-22, 2^-24, 2^-26
+    osf_ids = ["b4cf5", "pj6yg", "26w5v", "3cysm", "ebync", "r9v8f"]
 
     # wse-async-ga runtime config nestedSubgridSizeFactor of these runs,
     # which trait logger output doesn't record
     nest_factor = 2
 
-    # sample every nth PE along each axis for whole-grid animation
-    grid_stride = 8
+    # sample every nth PE along each axis for whole-grid animation; the
+    # smallest nested subgrid size (nRowSubgrid), so subgrid edges fall
+    # between sampled cells, and each sampled cell lies within one subgrid
+    grid_stride = 9
 
     # most PEs per side to sample within each subgrid
     subgrid_max_res = 72
