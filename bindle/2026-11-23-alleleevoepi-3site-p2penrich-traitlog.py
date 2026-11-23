@@ -380,7 +380,7 @@ def define_unpack(addend_groups, downstream, n_sites, np, pl, squeeze_int):
         assert strains.shape == (len(times), len(tiles))
         return times, tiles, strains
 
-    return (unpack_strain_timeseries,)
+    return unpack_strain_timeseries, unpack_strains
 
 
 @app.cell
@@ -951,17 +951,27 @@ def delimit_outcome(mo):
     mo.md("""
     ## Outcome per Subgrid
 
-    Classifies each subgrid's end state from its sampled hosts' strains,
-    pooled over the last `outcome_window` generations (whole-grid sample
-    PEs, 16 per subgrid), as in allele-evoepi-concept's mutation sweep
-    notebooks: a subgrid has converged on a complement pair only if both
-    members each hold at least 1/3 of its infections.
+    Classifies each subgrid's end state from the strains of the sampled
+    hosts of all of its PEs (256), over the last `outcome_window`
+    generations. (The whole-grid sample's 16 PEs per subgrid are too few:
+    among subgrids with every PE unpacked, they often rank a different pair
+    of strains first.) So, this unpacks every PE of each run, which is slow.
 
-    - **founder complements**: wildtype `000` and its bitwise complement
-      `111` each hold at least 1/3;
-    - **medial complements**: both strains of some other complement pair
-      (`001`/`110`, `010`/`101`, or `100`/`011`) each hold at least 1/3;
+    A subgrid has converged on a complement pair if its two most common
+    strains are bitwise complements, and together hold at least
+    `outcome_pair_share` of its infections (3/10; with all 8 strains
+    equally common, a pair holds 1/4).
+
+    - **founder complements**: the pair is wildtype `000` and `111`;
+    - **medial complements**: the pair is `001`/`110`, `010`/`101`, or
+      `100`/`011`;
     - **unconverged**: neither.
+
+    (allele-evoepi-concept's mutation sweep notebooks instead require each
+    member of a pair to hold at least 1/3. Here, at high mutation rates,
+    mutation keeps a large share of infections in other strains: e.g., at
+    2^-8, `000` and `111` are the two most common strains in most subgrids,
+    but hold only about 28% each.)
 
     Plots, over both runs, the fraction of subgrids with each outcome
     against mutation rate, with 95% Wilson score intervals.
@@ -970,63 +980,116 @@ def delimit_outcome(mo):
 
 
 @app.cell
-def compute_outcome(n_sites, np, pl, runs):
-    # generations, at end of run, to pool sampled hosts' strains over
+def count_outcome_strains(osf_ids, pl, tiles_all, tqdm, unpack_strains):
+    # generations, at end of run, to count sampled hosts' strains over
     outcome_window = 5000
-    _pair_threshold = 1 / 3
 
-    def _calc_outcomes(run: dict) -> pl.DataFrame:
-        tiles = run["tiles"].with_row_index("pe").filter("is_grid_sample")
-        pes = tiles["pe"].to_numpy()
-        strains = run["strains"][
-            run["times"] >= run["times"].max() - outcome_window
-        ]
-        # per subgrid, infections of each strain
-        df = (
-            tiles.select("subgrid", "mutlog2")
-            .with_columns(
-                pl.Series(f"n{s}", (strains == 1 + s).sum(axis=0)[pes])
-                for s in range(1 << n_sites)
-            )
-            .group_by("mutlog2", "subgrid")
-            .agg(pl.col(r"^n\d+$").sum())
-        )
-        counts = df.select(pl.col(r"^n\d+$")).to_numpy().astype(float)
-        total = counts.sum(axis=1)
-        assert (total > 0).all()
-        frac = counts / total[:, None]
-        all_ones = (1 << n_sites) - 1
-        is_pair = lambda s: (frac[:, s] >= _pair_threshold) & (
-            frac[:, all_ones ^ s] >= _pair_threshold
-        )
-        is_founder = is_pair(0)
-        is_medial = np.any(
-            [is_pair(s) for s in range(1, 1 << (n_sites - 1))], axis=0
-        )
-        return df.select(
-            "mutlog2",
-            "subgrid",
-            num_infections=pl.Series(total),
-            outcome=pl.Series(
-                np.where(
-                    is_founder,
-                    "founder complements",
-                    np.where(is_medial, "medial complements", "unconverged"),
+    def _count_strains(osf_id: str, chunk_size: int = 4000) -> pl.DataFrame:
+        """Per subgrid, logged infections of each strain within window,
+        over all PEs."""
+        df = pl.read_parquet(
+            f"https://osf.io/{osf_id}/download",
+            columns=[
+                "nCycle",
+                "tile",
+                "row",
+                "col",
+                "data_hex",
+                "dstream_algo",
+                "dstream_storage_bitoffset",
+                "dstream_storage_bitwidth",
+                "dstream_S",
+                "dstream_T_bitoffset",
+                "dstream_T_bitwidth",
+                "dstream_storage_multiplex",
+            ],
+        ).with_row_index("dstream_data_id")
+        num_cycles = df["nCycle"].unique().item()
+        df = df.drop("nCycle")
+        # unpack in chunks of PEs, to save memory
+        counts = pl.concat(
+            [
+                unpack_strains(df.slice(start, chunk_size))
+                .filter(
+                    pl.col("dstream_Tbar") >= num_cycles - outcome_window,
+                    pl.col("strain") > 0,
                 )
-            ),
+                .group_by("row", "col", "strain")
+                .agg(n=pl.len())
+                for start in tqdm(range(0, len(df), chunk_size))
+            ]
+        )
+        return (
+            counts.join(
+                tiles_all[osf_id]
+                .select("row", "col", "subgrid", "mutlog2")
+                .with_columns(pl.col("row", "col").cast(pl.UInt16)),
+                on=["row", "col"],
+            )
+            .group_by("mutlog2", "subgrid", "strain")
+            .agg(pl.col("n").sum())
         )
 
-    outcomes = pl.concat(
+    outcome_counts = pl.concat(
         [
-            _calc_outcomes(_run).with_columns(osf_id=pl.lit(_osf_id))
-            for _osf_id, _run in runs.items()
+            _count_strains(_osf_id).with_columns(osf_id=pl.lit(_osf_id))
+            for _osf_id in osf_ids
         ]
+    )
+    outcome_counts.group_by("osf_id").agg(pl.col("n").sum())
+    return outcome_counts, outcome_window
+
+
+@app.cell
+def compute_outcome(n_sites, np, outcome_counts, pl):
+    # least share of infections for a subgrid's two most common strains
+    outcome_pair_share = 3 / 10
+
+    # per subgrid, infections of each strain, as columns
+    _df = (
+        outcome_counts.with_columns(strain=pl.col("strain") - 1)
+        .pivot(
+            on="strain",
+            index=["osf_id", "mutlog2", "subgrid"],
+            values="n",
+            on_columns=range(1 << n_sites),
+        )
+        .fill_null(0)
+    )
+    _counts = _df.select(pl.exclude("osf_id", "mutlog2", "subgrid")).to_numpy()
+    _counts = _counts.astype(float)
+    assert _counts.shape[1] == 1 << n_sites
+    _total = _counts.sum(axis=1)
+
+    # two most common strains: complements, with enough share?
+    _order = np.argsort(-_counts, axis=1, kind="stable")
+    _top1, _top2 = _order[:, 0], _order[:, 1]
+    _index = np.arange(len(_counts))
+    _pair_share = (_counts[_index, _top1] + _counts[_index, _top2]) / _total
+    _is_pair = ((_top1 ^ _top2) == (1 << n_sites) - 1) & (
+        _pair_share >= outcome_pair_share
+    )
+    _is_founder = _is_pair & ((_top1 == 0) | (_top2 == 0))
+    outcomes = _df.select(
+        "osf_id",
+        "mutlog2",
+        "subgrid",
+        num_infections=pl.Series(_total),
+        pair_share=pl.Series(_pair_share),
+        outcome=pl.Series(
+            np.where(
+                _is_founder,
+                "founder complements",
+                np.where(_is_pair, "medial complements", "unconverged"),
+            )
+        ),
     )
     outcomes.group_by("mutlog2").agg(
         num_subgrids=pl.len(),
         median_infections=pl.col("num_infections").median(),
+        median_pair_share=pl.col("pair_share").median(),
     ).sort("mutlog2")
-    return outcome_window, outcomes
+    return outcome_pair_share, outcomes
 
 
 @app.cell
