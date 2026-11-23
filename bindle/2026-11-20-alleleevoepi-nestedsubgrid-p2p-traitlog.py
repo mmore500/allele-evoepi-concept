@@ -80,7 +80,7 @@ def delimit_intro(mo):
     Nested subgrids: `nRowSubgrid` x `nRowSubgrid` subgrids at the corner
     PE (row 0, col 0), then L-shaped shells of `factor`^2 - 1 subgrids,
     each `factor` times larger, with subgrids overhanging the grid edge
-    clipped (wse-async-ga runtime config `nestedSubgridSizeFactor`).
+    clipped (wse-async-ga runtime config `nestingFactorSubgrid`).
 
     For each run:
     1. animates the whole grid, sampling every 9th PE along each axis, with
@@ -122,7 +122,7 @@ def configure_data():
     # mutation rate 2^-16, 2^-18, 2^-20, 2^-22, 2^-24, 2^-26
     osf_ids = ["b4cf5", "pj6yg", "26w5v", "3cysm", "ebync", "r9v8f"]
 
-    # wse-async-ga runtime config nestedSubgridSizeFactor of these runs,
+    # wse-async-ga runtime config nestingFactorSubgrid of these runs,
     # which trait logger output doesn't record
     nest_factor = 2
 
