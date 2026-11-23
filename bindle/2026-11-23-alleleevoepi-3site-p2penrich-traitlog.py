@@ -39,6 +39,7 @@ def import_pkg():
         np,
         pl,
         plt,
+        sns,
         squeeze_int,
         strain_palette,
         tp,
@@ -113,8 +114,9 @@ def delimit_intro(mo):
     5. plots strain proportions over time per mutation rate, pooling the
        whole-grid sample's PEs across all subgrids at that rate;
 
-    Then, over both runs, plots mutant strains' share of infections against
-    mutation rate.
+    Then, over both runs, plots against mutation rate mutant strains' share
+    of infections, and the fraction of subgrids ending in founder
+    complements, medial complements, or unconverged.
 
     Colors: black, uninfected; strains colored by number of mutant sites
     (hue), with strains of the same number set apart by lightness (as
@@ -935,6 +937,144 @@ def plot_mutant_share(nbname, np, pl, plt, runs, tp):
         _ax.set_ylim(0, 1)
         _ax.legend(frameon=False)
     _mean
+    return
+
+
+@app.cell(hide_code=True)
+def delimit_outcome(mo):
+    mo.md("""
+    ## Outcome per Subgrid
+
+    Classifies each subgrid's end state from its sampled hosts' strains,
+    pooled over the last `outcome_window` generations (whole-grid sample
+    PEs, 16 per subgrid), as in allele-evoepi-concept's mutation sweep
+    notebooks: a subgrid has converged on a complement pair only if both
+    members each hold at least 1/3 of its infections.
+
+    - **founder complements**: wildtype `000` and its bitwise complement
+      `111` each hold at least 1/3;
+    - **medial complements**: both strains of some other complement pair
+      (`001`/`110`, `010`/`101`, or `100`/`011`) each hold at least 1/3;
+    - **unconverged**: neither.
+
+    Plots, over both runs, the fraction of subgrids with each outcome
+    against mutation rate, with 95% Wilson score intervals.
+    """)
+    return
+
+
+@app.cell
+def compute_outcome(n_sites, np, pl, runs):
+    # generations, at end of run, to pool sampled hosts' strains over
+    outcome_window = 5000
+    _pair_threshold = 1 / 3
+
+    def _calc_outcomes(run: dict) -> pl.DataFrame:
+        tiles = run["tiles"].with_row_index("pe").filter("is_grid_sample")
+        pes = tiles["pe"].to_numpy()
+        strains = run["strains"][
+            run["times"] >= run["times"].max() - outcome_window
+        ]
+        # per subgrid, infections of each strain
+        df = (
+            tiles.select("subgrid", "mutlog2")
+            .with_columns(
+                pl.Series(f"n{s}", (strains == 1 + s).sum(axis=0)[pes])
+                for s in range(1 << n_sites)
+            )
+            .group_by("mutlog2", "subgrid")
+            .agg(pl.col(r"^n\d+$").sum())
+        )
+        counts = df.select(pl.col(r"^n\d+$")).to_numpy().astype(float)
+        total = counts.sum(axis=1)
+        assert (total > 0).all()
+        frac = counts / total[:, None]
+        all_ones = (1 << n_sites) - 1
+        is_pair = lambda s: (frac[:, s] >= _pair_threshold) & (
+            frac[:, all_ones ^ s] >= _pair_threshold
+        )
+        is_founder = is_pair(0)
+        is_medial = np.any(
+            [is_pair(s) for s in range(1, 1 << (n_sites - 1))], axis=0
+        )
+        return df.select(
+            "mutlog2",
+            "subgrid",
+            num_infections=pl.Series(total),
+            outcome=pl.Series(
+                np.where(
+                    is_founder,
+                    "founder complements",
+                    np.where(is_medial, "medial complements", "unconverged"),
+                )
+            ),
+        )
+
+    outcomes = pl.concat(
+        [
+            _calc_outcomes(_run).with_columns(osf_id=pl.lit(_osf_id))
+            for _osf_id, _run in runs.items()
+        ]
+    )
+    outcomes.group_by("mutlog2").agg(
+        num_subgrids=pl.len(),
+        median_infections=pl.col("num_infections").median(),
+    ).sort("mutlog2")
+    return (outcomes,)
+
+
+@app.cell
+def plot_outcomes(nbname, np, outcomes, pl, plt, sns, tp):
+    _groups = ["founder complements", "medial complements", "unconverged"]
+    _palette = dict(zip(_groups, sns.color_palette("colorblind", len(_groups))))
+    _z = 1.959964  # 95% Wilson score interval
+    _summary = (
+        outcomes.group_by("mutlog2")
+        .agg(
+            pl.len().alias("n"),
+            *((pl.col("outcome") == _g).sum().alias(_g) for _g in _groups),
+        )
+        .sort("mutlog2")
+    )
+    with tp.teed(
+        plt.subplots,
+        figsize=(7.5, 3.8),
+        constrained_layout=True,
+        teeplot_outattrs={"a": "outcome-fractions"},
+        teeplot_subdir=nbname,
+    ) as (_fig, _ax):
+        _x = _summary["mutlog2"].to_numpy()
+        _n = _summary["n"].to_numpy()
+        for _g in _groups:
+            _p = _summary[_g].to_numpy() / _n
+            _center = (_p + _z**2 / (2 * _n)) / (1 + _z**2 / _n)
+            _half = (
+                _z
+                * np.sqrt(_p * (1 - _p) / _n + _z**2 / (4 * _n**2))
+                / (1 + _z**2 / _n)
+            )
+            _ax.fill_between(
+                _x,
+                _center - _half,
+                _center + _half,
+                color=_palette[_g],
+                alpha=0.2,
+                linewidth=0,
+            )
+            _ax.plot(
+                _x, _p, marker="o", color=_palette[_g], linewidth=2, label=_g
+            )
+        _ax.set_xticks(_x)
+        _ax.set_ylim(-0.02, 1.02)
+        _ax.set_xlabel("Mutation Rate (log2)")
+        _ax.set_ylabel("Fraction of Subgrids")
+        _ax.legend(
+            loc="lower center",
+            bbox_to_anchor=(0.5, 1.0),
+            ncol=len(_groups),
+            frameon=False,
+        )
+    _summary.with_columns(pl.col(_groups) / pl.col("n"))
     return
 
 
